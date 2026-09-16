@@ -9,4 +9,13 @@ if command -v systemctl >/dev/null 2>&1; then
 fi
 rm -f /usr/local/bin/lnmp-panel /etc/systemd/system/lnmp-panel.service
 rm -rf /etc/lnmp-panel /var/lib/lnmp-panel /var/log/lnmp-panel
+if [[ -d /etc/logrotate.d ]]; then
+  for f in /etc/logrotate.d/*.disabled; do
+    [[ -e "$f" ]] || continue
+    orig="${f%.disabled}"
+    if [[ ! -e "$orig" ]]; then
+      mv "$f" "$orig"
+    fi
+  done
+fi
 echo "已卸载面板。站点目录 /var/www 未删除。"

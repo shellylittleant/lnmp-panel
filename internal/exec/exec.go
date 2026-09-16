@@ -101,6 +101,12 @@ var cronDenied = map[string]struct{}{
 	"docker": {}, "ufw": {}, "iptables": {}, "pecl": {}, "apache2": {},
 }
 
+// CronDenied 是否在误操作禁止名单。不是安全边界，可用 env 等绕过。
+func CronDenied(argv0 string) bool {
+	_, bad := cronDenied[filepath.Base(argv0)]
+	return bad
+}
+
 // RunAbs 仅供面板托管 crontab「立刻执行」：绝对路径、禁止 shell 与明确不做的工具。
 func RunAbs(ctx context.Context, timeout time.Duration, argv ...string) (Result, error) {
 	var r Result
@@ -110,8 +116,7 @@ func RunAbs(ctx context.Context, timeout time.Duration, argv ...string) (Result,
 	if !filepath.IsAbs(argv[0]) {
 		return r, fmt.Errorf("命令必须是绝对路径")
 	}
-	base := filepath.Base(argv[0])
-	if _, bad := cronDenied[base]; bad {
+	if CronDenied(argv[0]) {
 		return r, fmt.Errorf("禁止执行：%s", argv[0])
 	}
 	return runUnchecked(ctx, timeout, nil, nil, argv...)

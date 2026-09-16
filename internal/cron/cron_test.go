@@ -2,10 +2,14 @@ package cron
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"lnmp-panel/internal/exec"
 	"lnmp-panel/internal/store"
 )
 
@@ -48,6 +52,63 @@ func TestValidateAndCRUD(t *testing.T) {
 	items, _ = s.List()
 	if items[0].LastStatus != "ok" {
 		t.Fatalf("%+v", items[0])
+	}
+}
+
+func TestNameInjectAndBadSchedule(t *testing.T) {
+	dir := t.TempDir()
+	db, err := store.Open(filepath.Join(dir, "p.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := New(db)
+	s.SkipExec = true
+	if _, err := s.Create(context.Background(), "x\n* * * * * /usr/bin/touch /tmp/pwned", "* * * * *", "/usr/bin/true", true); err == nil {
+		t.Fatal("名称换行应拒绝")
+	}
+	if _, err := s.Create(context.Background(), "x#inject", "* * * * *", "/usr/bin/true", true); err == nil {
+		t.Fatal("名称含 # 应拒绝")
+	}
+	if _, err := s.Create(context.Background(), "ok", "99 * * * *", "/usr/bin/true", true); err == nil {
+		t.Fatal("分钟 99 应拒绝")
+	}
+	if _, err := s.Create(context.Background(), "ok", "* * * * 8", "/usr/bin/true", true); err == nil {
+		t.Fatal("星期 8 应拒绝")
+	}
+	items, _ := s.List()
+	if len(items) != 0 {
+		t.Fatalf("拒绝后不应留行：%+v", items)
+	}
+}
+
+func TestCreateRollbackWhenCrontabFails(t *testing.T) {
+	dir := t.TempDir()
+	db, err := store.Open(filepath.Join(dir, "p.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := New(db)
+	s.SkipExec = false
+	s.Runner = func(ctx context.Context, d time.Duration, argv ...string) (exec.Result, error) {
+		return exec.Result{}, nil
+	}
+	s.IORunner = func(ctx context.Context, d time.Duration, stdin io.Reader, argv ...string) (exec.Result, error) {
+		return exec.Result{Stderr: "boom"}, fmt.Errorf("fail")
+	}
+	if _, err := s.Create(context.Background(), "ping", "*/5 * * * *", "/usr/bin/true", true); err == nil {
+		t.Fatal("应失败")
+	}
+	items, _ := s.List()
+	if len(items) != 0 {
+		t.Fatalf("写 crontab 失败不应留孤儿行：%+v", items)
+	}
+}
+
+func TestCrontabEscapePercent(t *testing.T) {
+	if crontabEscape(`/usr/bin/date +%Y`) != `/usr/bin/date +\%Y` {
+		t.Fatal(crontabEscape(`/usr/bin/date +%Y`))
 	}
 }
 

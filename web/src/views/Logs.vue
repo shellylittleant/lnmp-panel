@@ -31,6 +31,7 @@ const maxSize = ref("100M");
 const rotateRaw = ref("");
 const drifted = ref(false);
 const force = ref(false);
+const truncated = ref(false);
 let es: EventSource | null = null;
 
 const levelOpts: SelectOption[] = [
@@ -107,6 +108,7 @@ async function loadStats() {
     return;
   }
   stats.value = r.data.live;
+  truncated.value = !!(r.data.truncated || r.data.live?.truncated);
 }
 
 async function loadRotate() {
@@ -177,6 +179,7 @@ function kv(m: Record<string, number> | undefined) {
       <n-data-table :columns="lineCols" :data="lines" :max-height="420" size="small" />
     </n-card>
     <n-card title="统计">
+      <n-alert v-if="truncated" type="warning" title="已截断">仅统计文件末尾（最多 256 MB），更早的记录未计入。</n-alert>
       <n-form inline>
         <n-form-item label="类型">
           <n-select v-model:value="kind" :options="kindOpts" style="width: 140px" />

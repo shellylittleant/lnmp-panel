@@ -31,7 +31,7 @@ func (s *Server) handleLogQuery(w http.ResponseWriter, r *http.Request) {
 		Source: q.Get("source"), Site: q.Get("site"), Q: q.Get("q"),
 		Level: q.Get("level"), From: q.Get("from"), To: q.Get("to"), Limit: limit,
 	})
-	if errors.Is(err, logview.ErrUnknownSource) {
+	if errors.Is(err, logview.ErrUnknownSource) || errors.Is(err, logview.ErrInvalidSite) {
 		writeErr(w, 400, "invalid", err.Error())
 		return
 	}
@@ -87,6 +87,10 @@ func (s *Server) handleLogStats(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	out, err := s.Logs.Stats(q.Get("kind"), q.Get("site"), q.Get("from"), q.Get("to"))
+	if errors.Is(err, logview.ErrInvalidSite) {
+		writeErr(w, 400, "invalid", err.Error())
+		return
+	}
 	if err != nil {
 		writeErr(w, 400, "invalid", err.Error())
 		return

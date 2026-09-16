@@ -13,5 +13,9 @@
 	sharedscripts
 	postrotate
 		[ -s /run/nginx.pid ] && kill -USR1 $(cat /run/nginx.pid) 2>/dev/null || true
+		for f in /run/php/php*-fpm.pid; do
+			[ -s "$f" ] && kill -USR1 $(cat "$f") 2>/dev/null || true
+		done
+		[ -f /var/lib/lnmp-panel/secrets/mysql-panel.cnf ] && /usr/bin/mysqladmin --defaults-extra-file=/var/lib/lnmp-panel/secrets/mysql-panel.cnf flush-logs >/dev/null 2>&1 || true
 	endscript
 }

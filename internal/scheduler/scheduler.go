@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -20,18 +21,25 @@ type Info struct {
 	Every   string `json:"every"`
 	LastRun string `json:"last_run"`
 	LastErr string `json:"last_error"`
+	Running bool   `json:"running"`
 }
 
 type Scheduler struct {
-	mu    sync.Mutex
-	jobs  []Job
-	last  map[string]time.Time
-	lerr  map[string]string
-	Tick  time.Duration
+	mu      sync.Mutex
+	jobs    []Job
+	last    map[string]time.Time
+	lerr    map[string]string
+	running map[string]bool
+	Tick    time.Duration
 }
 
 func New() *Scheduler {
-	return &Scheduler{last: map[string]time.Time{}, lerr: map[string]string{}, Tick: time.Second}
+	return &Scheduler{
+		last:    map[string]time.Time{},
+		lerr:    map[string]string{},
+		running: map[string]bool{},
+		Tick:    time.Second,
+	}
 }
 
 func (s *Scheduler) Register(id string, every time.Duration, fn JobFn) {
@@ -51,7 +59,7 @@ func (s *Scheduler) List() []Info {
 	defer s.mu.Unlock()
 	var out []Info
 	for _, j := range s.jobs {
-		info := Info{ID: j.ID, Every: j.Every.String()}
+		info := Info{ID: j.ID, Every: j.Every.String(), Running: s.running[j.ID]}
 		if t, ok := s.last[j.ID]; ok {
 			info.LastRun = t.UTC().Format(time.RFC3339)
 		}
@@ -88,22 +96,45 @@ func (s *Scheduler) Run(ctx context.Context) {
 				if t.Before(next[j.ID]) {
 					continue
 				}
+				if !s.tryStart(j.ID) {
+					continue
+				}
 				next[j.ID] = t.Add(j.Every)
-				s.runOne(ctx, j)
+				go s.runOne(ctx, j)
 			}
 		}
 	}
 }
 
-func (s *Scheduler) runOne(ctx context.Context, j Job) {
-	err := j.Fn(ctx)
+func (s *Scheduler) tryStart(id string) bool {
 	s.mu.Lock()
-	s.last[j.ID] = time.Now()
-	if err != nil {
-		s.lerr[j.ID] = err.Error()
-		log.Printf("调度 %s 失败：%v", j.ID, err)
-	} else {
-		s.lerr[j.ID] = ""
+	defer s.mu.Unlock()
+	if s.running[id] {
+		return false
 	}
-	s.mu.Unlock()
+	s.running[id] = true
+	return true
+}
+
+func (s *Scheduler) runOne(ctx context.Context, j Job) {
+	var err error
+	defer func() {
+		if rec := recover(); rec != nil {
+			err = fmt.Errorf("panic: %v", rec)
+			log.Printf("调度 %s panic：%v", j.ID, rec)
+		}
+		s.mu.Lock()
+		s.running[j.ID] = false
+		s.last[j.ID] = time.Now()
+		if err != nil {
+			s.lerr[j.ID] = err.Error()
+		} else {
+			s.lerr[j.ID] = ""
+		}
+		s.mu.Unlock()
+	}()
+	err = j.Fn(ctx)
+	if err != nil {
+		log.Printf("调度 %s 失败：%v", j.ID, err)
+	}
 }

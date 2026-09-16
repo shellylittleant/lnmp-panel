@@ -61,41 +61,95 @@ type Stats struct {
 	UA      map[string]int `json:"ua"`
 }
 
+type accessAgg struct {
+	st    Stats
+	uv    map[string]bool
+	rtSum float64
+	rtN   int
+}
+
+func newAccessAgg() *accessAgg {
+	return &accessAgg{
+		st: Stats{Status: map[string]int{}, URL: map[string]int{}, IP: map[string]int{}, Referer: map[string]int{}, UA: map[string]int{}},
+		uv: map[string]bool{},
+	}
+}
+
+func (a *accessAgg) add(ln string) {
+	h, ok := ParseAccessLine(ln)
+	if !ok {
+		return
+	}
+	a.st.PV++
+	a.uv[h.IP] = true
+	a.st.Status[strconv.Itoa(h.Status)]++
+	a.st.URL[h.URL]++
+	a.st.IP[h.IP]++
+	if h.Referer != "" && h.Referer != "-" {
+		a.st.Referer[h.Referer]++
+	}
+	if h.UA != "" {
+		a.st.UA[h.UA]++
+	}
+	if h.RT > 0 {
+		a.rtSum += h.RT
+		a.rtN++
+	}
+}
+
+func (a *accessAgg) result() Stats {
+	a.st.UV = len(a.uv)
+	if a.rtN > 0 {
+		a.st.RTAvg = a.rtSum / float64(a.rtN)
+	}
+	a.st.URL = topN(a.st.URL, 20)
+	a.st.IP = topN(a.st.IP, 20)
+	a.st.Referer = topN(a.st.Referer, 10)
+	a.st.UA = topN(a.st.UA, 10)
+	return a.st
+}
+
 func AggregateAccess(lines []string) Stats {
-	s := Stats{Status: map[string]int{}, URL: map[string]int{}, IP: map[string]int{}, Referer: map[string]int{}, UA: map[string]int{}}
-	uv := map[string]bool{}
-	var rtSum float64
-	var rtN int
+	a := newAccessAgg()
 	for _, ln := range lines {
-		h, ok := ParseAccessLine(ln)
-		if !ok {
-			continue
+		a.add(ln)
+	}
+	return a.result()
+}
+
+type slowAgg struct {
+	count   int
+	top     []SlowItem
+	pending float64
+	have    bool
+}
+
+func (a *slowAgg) add(ln string) {
+	if strings.HasPrefix(ln, "# Query_time:") {
+		fs := strings.Fields(ln)
+		if len(fs) >= 3 {
+			a.pending, _ = strconv.ParseFloat(fs[2], 64)
+			a.have = true
+			a.count++
 		}
-		s.PV++
-		uv[h.IP] = true
-		s.Status[strconv.Itoa(h.Status)]++
-		s.URL[h.URL]++
-		s.IP[h.IP]++
-		if h.Referer != "" && h.Referer != "-" {
-			s.Referer[h.Referer]++
+		return
+	}
+	if a.have && ln != "" && !strings.HasPrefix(ln, "#") && !strings.HasPrefix(ln, "SET timestamp") {
+		sql := ln
+		if len(sql) > 200 {
+			sql = sql[:200]
 		}
-		if h.UA != "" {
-			s.UA[h.UA]++
+		a.top = append(a.top, SlowItem{Seconds: a.pending, SQL: sql})
+		a.have = false
+		for i := len(a.top) - 1; i > 0; i-- {
+			if a.top[i].Seconds > a.top[i-1].Seconds {
+				a.top[i], a.top[i-1] = a.top[i-1], a.top[i]
+			}
 		}
-		if h.RT > 0 {
-			rtSum += h.RT
-			rtN++
+		if len(a.top) > 20 {
+			a.top = a.top[:20]
 		}
 	}
-	s.UV = len(uv)
-	if rtN > 0 {
-		s.RTAvg = rtSum / float64(rtN)
-	}
-	s.URL = topN(s.URL, 20)
-	s.IP = topN(s.IP, 20)
-	s.Referer = topN(s.Referer, 10)
-	s.UA = topN(s.UA, 10)
-	return s
 }
 
 type SlowItem struct {

@@ -9,7 +9,7 @@ const jobs = ref<
   { id: number; name: string; schedule: string; command: string; enabled: boolean; last_run_at: string | null; last_status: string }[]
 >([]);
 const drifted = ref(false);
-const sch = ref<{ id: string; every: string; last_run: string; last_error: string }[]>([]);
+const sch = ref<{ id: string; every: string; last_run: string; last_error: string; running: boolean }[]>([]);
 const name = ref("");
 const schedule = ref("*/5 * * * *");
 const command = ref("/usr/bin/true");
@@ -25,6 +25,7 @@ const cols: DataTableColumns<(typeof jobs.value)[0]> = [
 const schCols: DataTableColumns<(typeof sch.value)[0]> = [
   { title: "Job", key: "id" },
   { title: "周期", key: "every" },
+  { title: "运行中", key: "running", render: (r) => (r.running ? "是" : "") },
   { title: "上次运行", key: "last_run" },
   { title: "错误", key: "last_error" },
 ];

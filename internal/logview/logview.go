@@ -23,7 +23,15 @@ import (
 var (
 	ErrUnknownSource = errors.New("未知日志来源")
 	ErrDrift         = errors.New("磁盘配置与面板上次写入不一致，请确认后带 force=true 保存")
+	ErrInvalidSite   = errors.New("无效站点")
 )
+
+const (
+	queryTailBytes = 2 << 20
+	statsTailBytes = 256 << 20
+)
+
+var siteKeyRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 
 var (
 	reRotate = regexp.MustCompile(`(?m)^\s*rotate\s+(\d+)`)
@@ -37,13 +45,19 @@ type SiteRef struct {
 }
 
 type Service struct {
-	db         *store.DB
-	tpl        *template.Service
-	Sites      func() []SiteRef
-	RotatePath string
-	BackupRoot string
-	SkipExec   bool
-	Runner     func(ctx context.Context, d time.Duration, argv ...string) (exec.Result, error)
+	db           *store.DB
+	tpl          *template.Service
+	Sites        func() []SiteRef
+	RotatePath   string
+	BackupRoot   string
+	DistroDir    string // 空则 /etc/logrotate.d
+	SkipExec     bool
+	Runner       func(ctx context.Context, d time.Duration, argv ...string) (exec.Result, error)
+	ExtraSources []Source
+	AccessLog    string
+	AuthLog      string
+	SlowLog      string
+	StatsLimit   int64
 }
 
 func New(db *store.DB, tpl *template.Service) *Service {
@@ -105,6 +119,9 @@ func (s *Service) Sources() []Source {
 			})
 		}
 	}
+	for _, extra := range s.ExtraSources {
+		add(extra)
+	}
 	return out
 }
 
@@ -133,6 +150,9 @@ type QueryIn struct {
 }
 
 func (s *Service) ResolveSource(id, site string) (Source, bool) {
+	if site != "" && !siteKeyRe.MatchString(site) {
+		return Source{}, false
+	}
 	if id == "" && site != "" {
 		id = "site-access-" + site
 	}
@@ -147,11 +167,17 @@ func (s *Service) Query(ctx context.Context, in QueryIn) ([]Line, error) {
 	if limit <= 0 || limit > 2000 {
 		limit = 200
 	}
+	if in.Site != "" && !siteKeyRe.MatchString(in.Site) {
+		return nil, ErrInvalidSite
+	}
 	src, ok := s.ResolveSource(in.Source, in.Site)
 	if !ok {
+		if in.Site != "" && !siteKeyRe.MatchString(in.Site) {
+			return nil, ErrInvalidSite
+		}
 		return nil, ErrUnknownSource
 	}
-	raw, err := s.readTail(ctx, src, 2<<20, in.From, in.To)
+	raw, err := s.readTail(ctx, src, queryTailBytes, in.From, in.To)
 	if err != nil {
 		return nil, err
 	}
@@ -200,17 +226,76 @@ func (s *Service) readTail(ctx context.Context, src Source, max int, from, to st
 		}
 		return r.Stdout, nil
 	}
-	b, err := os.ReadFile(src.Path)
+	return readTailFile(src.Path, int64(max))
+}
+
+func readTailFile(path string, max int64) (string, error) {
+	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return "", nil
 		}
 		return "", err
 	}
-	if len(b) > max {
-		b = b[len(b)-max:]
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return "", err
 	}
-	return string(b), nil
+	sz := st.Size()
+	start := sz - max
+	if start < 0 {
+		start = 0
+	}
+	if _, err := f.Seek(start, io.SeekStart); err != nil {
+		return "", err
+	}
+	r := bufio.NewReaderSize(f, 64*1024)
+	if start > 0 {
+		_, _ = r.ReadString('\n')
+	}
+	var b strings.Builder
+	if n := sz - start; n > 0 && n < int64(^uint(0)>>1) {
+		b.Grow(int(n))
+	}
+	if _, err := io.Copy(&b, r); err != nil {
+		return b.String(), err
+	}
+	return b.String(), nil
+}
+
+func scanFileTail(path string, max int64, fn func(line string)) (truncated bool, err error) {
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return false, err
+	}
+	sz := st.Size()
+	truncated = sz > max
+	start := int64(0)
+	if truncated {
+		start = sz - max
+	}
+	if _, err := f.Seek(start, io.SeekStart); err != nil {
+		return truncated, err
+	}
+	sc := bufio.NewScanner(f)
+	buf := make([]byte, 0, 64*1024)
+	sc.Buffer(buf, 1<<20)
+	if start > 0 && sc.Scan() {
+		// 丢掉半行
+	}
+	for sc.Scan() {
+		fn(sc.Text())
+	}
+	return truncated, sc.Err()
 }
 
 func (s *Service) Follow(ctx context.Context, sourceID, site string, emit func(Line) error) error {
@@ -319,29 +404,78 @@ func (s *Service) Follow(ctx context.Context, sourceID, site string, emit func(L
 	}
 }
 
+func (s *Service) statsLimit() int64 {
+	if s.StatsLimit > 0 {
+		return s.StatsLimit
+	}
+	return statsTailBytes
+}
+
+func (s *Service) accessPath(siteKey string) (string, error) {
+	if siteKey != "" {
+		if !siteKeyRe.MatchString(siteKey) {
+			return "", ErrInvalidSite
+		}
+		if s.Sites != nil {
+			ok := false
+			for _, st := range s.Sites() {
+				if st.Key == siteKey {
+					ok = true
+					break
+				}
+			}
+			if !ok {
+				return "", ErrInvalidSite
+			}
+		}
+		return "/var/log/nginx/" + siteKey + ".access.log", nil
+	}
+	if s.AccessLog != "" {
+		return s.AccessLog, nil
+	}
+	return "/var/log/nginx/access.log", nil
+}
+
 func (s *Service) StatsLive(kind, siteKey string) (any, error) {
 	switch kind {
 	case "ssh":
-		b, _ := os.ReadFile("/var/log/auth.log")
-		n := CountSSHFails(strings.Split(string(b), "\n"))
-		return map[string]any{"fails": n}, nil
-	case "slowsql":
-		b, _ := os.ReadFile("/var/log/mysql/mysql-slow.log")
-		lines := strings.Split(string(b), "\n")
-		c := 0
-		for _, ln := range lines {
-			if strings.HasPrefix(ln, "# Query_time:") {
-				c++
+		path := s.AuthLog
+		if path == "" {
+			path = "/var/log/auth.log"
+		}
+		n := 0
+		trunc, err := scanFileTail(path, s.statsLimit(), func(ln string) {
+			if strings.Contains(ln, "Failed password") || strings.Contains(ln, "authentication failure") {
+				n++
 			}
+		})
+		if err != nil {
+			return nil, err
 		}
-		return map[string]any{"slow": c, "top": TopSlowSQL(lines, 20)}, nil
+		return map[string]any{"fails": n, "truncated": trunc}, nil
+	case "slowsql":
+		path := s.SlowLog
+		if path == "" {
+			path = "/var/log/mysql/mysql-slow.log"
+		}
+		var a slowAgg
+		trunc, err := scanFileTail(path, s.statsLimit(), a.add)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"slow": a.count, "top": a.top, "truncated": trunc}, nil
 	default:
-		path := "/var/log/nginx/access.log"
-		if siteKey != "" {
-			path = "/var/log/nginx/" + siteKey + ".access.log"
+		path, err := s.accessPath(siteKey)
+		if err != nil {
+			return nil, err
 		}
-		b, _ := os.ReadFile(path)
-		return AggregateAccess(strings.Split(string(b), "\n")), nil
+		agg := newAccessAgg()
+		trunc, err := scanFileTail(path, s.statsLimit(), agg.add)
+		if err != nil {
+			return nil, err
+		}
+		st := agg.result()
+		return map[string]any{"pv": st.PV, "uv": st.UV, "rt_avg": st.RTAvg, "status": st.Status, "url": st.URL, "ip": st.IP, "referer": st.Referer, "ua": st.UA, "truncated": trunc}, nil
 	}
 }
 
@@ -349,8 +483,16 @@ func (s *Service) Stats(kind, siteKey, from, to string) (map[string]any, error) 
 	if kind == "" {
 		kind = "access"
 	}
+	if siteKey != "" && !siteKeyRe.MatchString(siteKey) {
+		return nil, ErrInvalidSite
+	}
 	live, err := s.StatsLive(kind, siteKey)
 	out := map[string]any{"live": live, "kind": kind, "site": siteKey}
+	if liveMap, ok := live.(map[string]any); ok {
+		if t, ok := liveMap["truncated"].(bool); ok {
+			out["truncated"] = t
+		}
+	}
 	if from != "" && to != "" {
 		out["hourly"] = s.statsHourly(kind, siteKey, from, to)
 	}
@@ -388,56 +530,66 @@ func (s *Service) statsHourly(kind, siteKey, from, to string) []map[string]any {
 	return out
 }
 
-func filterHour(lines []string, hour time.Time) []string {
-	from := hour
-	to := hour.Add(time.Hour)
-	var out []string
-	for _, ln := range lines {
-		t := LineTime(ln)
-		if t.IsZero() || (!t.Before(from) && t.Before(to)) {
-			out = append(out, ln)
-		}
+func inHour(ln string, hour time.Time) bool {
+	t := LineTime(ln)
+	if t.IsZero() {
+		return true
 	}
-	return out
+	return !t.Before(hour) && t.Before(hour.Add(time.Hour))
 }
 
 func (s *Service) AggregateHour(ctx context.Context) error {
 	hour := time.Now().UTC().Truncate(time.Hour)
 	now := hour.Format(time.RFC3339)
+	lim := s.statsLimit()
+	scanAccess := func(path string, siteID int64) {
+		agg := newAccessAgg()
+		trunc, err := scanFileTail(path, lim, func(ln string) {
+			if inHour(ln, hour) {
+				agg.add(ln)
+			}
+		})
+		if err != nil {
+			return
+		}
+		st := agg.result()
+		payload, _ := json.Marshal(map[string]any{"pv": st.PV, "uv": st.UV, "rt_avg": st.RTAvg, "status": st.Status, "url": st.URL, "ip": st.IP, "referer": st.Referer, "ua": st.UA, "truncated": trunc})
+		_, _ = s.db.SQL.Exec(`INSERT INTO log_stats_hourly(bucket, site_id, kind, payload) VALUES (?,?,?,?)
+			ON CONFLICT(bucket, site_id, kind) DO UPDATE SET payload=excluded.payload`, now, siteID, "access", string(payload))
+	}
 	if s.Sites != nil {
 		for _, st := range s.Sites() {
-			path := "/var/log/nginx/" + st.Key + ".access.log"
-			b, err := os.ReadFile(path)
-			if err != nil {
-				continue
-			}
-			stt := AggregateAccess(filterHour(strings.Split(string(b), "\n"), hour))
-			payload, _ := json.Marshal(stt)
-			_, _ = s.db.SQL.Exec(`INSERT INTO log_stats_hourly(bucket, site_id, kind, payload) VALUES (?,?,?,?)
-				ON CONFLICT(bucket, site_id, kind) DO UPDATE SET payload=excluded.payload`, now, st.ID, "access", string(payload))
+			scanAccess("/var/log/nginx/"+st.Key+".access.log", st.ID)
 		}
 	}
-	if b, err := os.ReadFile("/var/log/nginx/access.log"); err == nil {
-		stt := AggregateAccess(filterHour(strings.Split(string(b), "\n"), hour))
-		payload, _ := json.Marshal(stt)
-		_, _ = s.db.SQL.Exec(`INSERT INTO log_stats_hourly(bucket, site_id, kind, payload) VALUES (?,?,?,?)
-			ON CONFLICT(bucket, site_id, kind) DO UPDATE SET payload=excluded.payload`, now, 0, "access", string(payload))
+	ap := "/var/log/nginx/access.log"
+	if s.AccessLog != "" {
+		ap = s.AccessLog
 	}
-	if b, err := os.ReadFile("/var/log/auth.log"); err == nil {
-		n := CountSSHFails(filterHour(strings.Split(string(b), "\n"), hour))
-		payload, _ := json.Marshal(map[string]int{"fails": n})
+	scanAccess(ap, 0)
+	auth := "/var/log/auth.log"
+	if s.AuthLog != "" {
+		auth = s.AuthLog
+	}
+	n := 0
+	trunc, err := scanFileTail(auth, lim, func(ln string) {
+		if inHour(ln, hour) && (strings.Contains(ln, "Failed password") || strings.Contains(ln, "authentication failure")) {
+			n++
+		}
+	})
+	if err == nil {
+		payload, _ := json.Marshal(map[string]any{"fails": n, "truncated": trunc})
 		_, _ = s.db.SQL.Exec(`INSERT INTO log_stats_hourly(bucket, site_id, kind, payload) VALUES (?,?,?,?)
 			ON CONFLICT(bucket, site_id, kind) DO UPDATE SET payload=excluded.payload`, now, 0, "ssh", string(payload))
 	}
-	if b, err := os.ReadFile("/var/log/mysql/mysql-slow.log"); err == nil {
-		lines := strings.Split(string(b), "\n")
-		c := 0
-		for _, ln := range lines {
-			if strings.HasPrefix(ln, "# Query_time:") {
-				c++
-			}
-		}
-		payload, _ := json.Marshal(map[string]any{"slow": c, "top": TopSlowSQL(lines, 10)})
+	slow := "/var/log/mysql/mysql-slow.log"
+	if s.SlowLog != "" {
+		slow = s.SlowLog
+	}
+	var a slowAgg
+	trunc, err = scanFileTail(slow, lim, a.add)
+	if err == nil {
+		payload, _ := json.Marshal(map[string]any{"slow": a.count, "top": a.top, "truncated": trunc})
 		_, _ = s.db.SQL.Exec(`INSERT INTO log_stats_hourly(bucket, site_id, kind, payload) VALUES (?,?,?,?)
 			ON CONFLICT(bucket, site_id, kind) DO UPDATE SET payload=excluded.payload`, now, 0, "slowsql", string(payload))
 	}
@@ -529,6 +681,7 @@ func (s *Service) PutRotate(ctx context.Context, in RotateForm) error {
 	}
 	s.setSetting("logrotate_hash", panelFS.HashBytes([]byte(body)))
 	s.setSetting("log_keep_days", strconv.Itoa(in.KeepDays))
+	s.disableDistroRotate()
 	if s.SkipExec {
 		return nil
 	}
@@ -552,6 +705,10 @@ func TailFile(path string, after int64) (string, int64, error) {
 	if sz <= after {
 		return "", sz, nil
 	}
+	const followCap = 8 << 20
+	if sz-after > followCap {
+		after = sz - followCap
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return "", after, err
@@ -560,6 +717,45 @@ func TailFile(path string, after int64) (string, int64, error) {
 	if _, err := f.Seek(after, io.SeekStart); err != nil {
 		return "", after, err
 	}
-	b, err := io.ReadAll(bufio.NewReader(f))
+	b, err := io.ReadAll(bufio.NewReaderSize(f, 64*1024))
 	return string(b), sz, err
+}
+
+func (s *Service) distroDir() string {
+	if s.DistroDir != "" {
+		return s.DistroDir
+	}
+	if s.SkipExec {
+		return ""
+	}
+	return "/etc/logrotate.d"
+}
+
+func (s *Service) disableDistroRotate() {
+	dir := s.distroDir()
+	if dir == "" {
+		return
+	}
+	names := []string{"nginx", "mysql-server", "mysql"}
+	for _, n := range names {
+		disableRotateFile(filepath.Join(dir, n))
+	}
+	matches, _ := filepath.Glob(filepath.Join(dir, "php*-fpm"))
+	for _, p := range matches {
+		if strings.HasSuffix(p, ".disabled") {
+			continue
+		}
+		disableRotateFile(p)
+	}
+}
+
+func disableRotateFile(src string) {
+	if _, err := os.Stat(src); err != nil {
+		return
+	}
+	dst := src + ".disabled"
+	if _, err := os.Stat(dst); err == nil {
+		return
+	}
+	_ = os.Rename(src, dst)
 }

@@ -3,7 +3,7 @@
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq ca-certificates curl logrotate cron >/dev/null
+apt-get install -y -qq ca-certificates curl logrotate cron nginx >/dev/null
 install -m 0755 /src/bin/lnmp-panel-linux /usr/local/bin/lnmp-panel
 PFX=abcdef0123456789abcdef0123456789
 lnmp-panel bootstrap --data-dir /var/lib/lnmp-panel --etc-dir /etc/lnmp-panel \
@@ -36,12 +36,20 @@ ST=$(curl -sk -c /tmp/cj -b /tmp/cj "$API/logs/stats?kind=ssh")
 echo "$ST" | grep -q '"ok":true' || { echo STATS_FAIL; echo "$ST"; exit 1; }
 echo STATS_OK
 
+echo '/var/log/php8.3-fpm.log { daily }' >/etc/logrotate.d/php8.3-fpm
+test -f /etc/logrotate.d/nginx
 ROT=$(curl -sk -c /tmp/cj -b /tmp/cj -X PUT -H 'Content-Type: application/json' \
   -H "X-CSRF-Token: $CSRF" \
   -d '{"keep_days":7,"max_size":"50M"}' "$API/logs/rotate")
 echo "ROTATE=$ROT"
 echo "$ROT" | grep -q '"ok":true' || { echo ROTATE_FAIL; cat /tmp/panel.log; exit 1; }
 grep -q 'rotate 7' /etc/logrotate.d/lnmp-panel || { echo ROTATE_FILE_FAIL; cat /etc/logrotate.d/lnmp-panel; exit 1; }
+grep -q 'php\*-fpm.pid' /etc/logrotate.d/lnmp-panel || { echo ROTATE_PHP_PID_FAIL; cat /etc/logrotate.d/lnmp-panel; exit 1; }
+grep -q mysqladmin /etc/logrotate.d/lnmp-panel || { echo ROTATE_MYSQL_FAIL; cat /etc/logrotate.d/lnmp-panel; exit 1; }
+test -f /etc/logrotate.d/nginx.disabled || { echo NGINX_NOT_DISABLED; ls /etc/logrotate.d; exit 1; }
+test -f /etc/logrotate.d/php8.3-fpm.disabled || { echo PHP_FPM_NOT_DISABLED; exit 1; }
+LRDBG=$(logrotate -d /etc/logrotate.conf 2>&1 || true)
+echo "$LRDBG" | grep -q 'duplicate log entry' && { echo DUPLICATE_LOGROTATE; echo "$LRDBG"; exit 1; }
 echo ROTATE_OK
 
 # 调度器启动后约 1 秒会采样一次
@@ -55,6 +63,7 @@ SCH=$(curl -sk -c /tmp/cj -b /tmp/cj "$API/scheduler")
 echo "$SCH" | grep -q 'ssl.renew' || { echo SCHED_FAIL; echo "$SCH"; exit 1; }
 echo "$SCH" | grep -q 'metrics.sample' || { echo SCHED_SAMPLE_FAIL; echo "$SCH"; exit 1; }
 echo "$SCH" | grep -q 'log.aggregate' || { echo SCHED_LOG_FAIL; echo "$SCH"; exit 1; }
+echo "$SCH" | grep -q 'running' || { echo SCHED_RUNNING_FAIL; echo "$SCH"; exit 1; }
 echo SCHEDULER_OK
 
 CR=$(curl -sk -c /tmp/cj -b /tmp/cj -X POST -H 'Content-Type: application/json' \
@@ -68,6 +77,17 @@ RUN=$(curl -sk -c /tmp/cj -b /tmp/cj -X POST -H 'Content-Type: application/json'
 echo "RUN=$RUN"
 echo "$RUN" | grep -q '"ok":true' || { echo CRON_RUN_FAIL; echo "$RUN"; exit 1; }
 crontab -l | grep -q '/usr/bin/true' || { echo CRONTAB_FAIL; crontab -l; exit 1; }
+INJ=$(curl -sk -c /tmp/cj -b /tmp/cj -X POST -H 'Content-Type: application/json' \
+  -H "X-CSRF-Token: $CSRF" \
+  -d '{"name":"x\n* * * * * /usr/bin/touch /tmp/pwned","schedule":"* * * * *","command":"/usr/bin/true","enabled":true}' "$API/cron")
+echo "INJECT=$INJ"
+echo "$INJ" | grep -q '"ok":true' && { echo CRON_INJECT_ACCEPTED; exit 1; }
+BAD=$(curl -sk -c /tmp/cj -b /tmp/cj -X POST -H 'Content-Type: application/json' \
+  -H "X-CSRF-Token: $CSRF" \
+  -d '{"name":"bad","schedule":"99 * * * *","command":"/usr/bin/true","enabled":true}' "$API/cron")
+echo "BADSCHED=$BAD"
+echo "$BAD" | grep -q '"ok":true' && { echo CRON_BAD_SCHEDULE_ACCEPTED; exit 1; }
+crontab -l | grep -q pwned && { echo CRON_PWNED; crontab -l; exit 1; }
 echo CRON_OK
 
 ENV=$(curl -sk -c /tmp/cj -b /tmp/cj "$API/env")

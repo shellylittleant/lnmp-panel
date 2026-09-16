@@ -5,11 +5,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"regexp"
+	"io"
+	"strconv"
 	"strings"
 	"time"
-
-	"path/filepath"
+	"unicode"
 
 	"lnmp-panel/internal/exec"
 	"lnmp-panel/internal/store"
@@ -20,10 +20,7 @@ const (
 	endMark   = "# LNMP-PANEL-END"
 )
 
-var (
-	ErrNotFound = fmt.Errorf("定时任务不存在")
-	schedRe     = regexp.MustCompile(`^([A-Za-z0-9*/,#-]+ ){4}[A-Za-z0-9*/,#-]+$`)
-)
+var ErrNotFound = fmt.Errorf("定时任务不存在")
 
 type Job struct {
 	ID         int64   `json:"id"`
@@ -39,10 +36,11 @@ type Service struct {
 	db       *store.DB
 	SkipExec bool
 	Runner   func(ctx context.Context, d time.Duration, argv ...string) (exec.Result, error)
+	IORunner func(ctx context.Context, d time.Duration, stdin io.Reader, argv ...string) (exec.Result, error)
 }
 
 func New(db *store.DB) *Service {
-	return &Service{db: db, Runner: exec.Run}
+	return &Service{db: db, Runner: exec.Run, IORunner: exec.RunIO}
 }
 
 func (s *Service) List() ([]Job, error) {
@@ -72,11 +70,11 @@ func (s *Service) List() ([]Job, error) {
 }
 
 func validate(name, schedule, command string) error {
-	if strings.TrimSpace(name) == "" {
-		return fmt.Errorf("名称不能为空")
+	if err := validateName(name); err != nil {
+		return err
 	}
-	if !schedRe.MatchString(strings.TrimSpace(schedule)) {
-		return fmt.Errorf("调度须为标准五段 cron")
+	if err := validateSchedule(schedule); err != nil {
+		return err
 	}
 	if strings.ContainsAny(command, "\n\r") {
 		return fmt.Errorf("命令不能含换行")
@@ -89,16 +87,79 @@ func validate(name, schedule, command string) error {
 	if len(argv) == 0 {
 		return fmt.Errorf("命令不能为空")
 	}
-	base := filepath.Base(argv[0])
-	if _, bad := cronDenied[base]; bad {
+	if exec.CronDenied(argv[0]) {
 		return fmt.Errorf("禁止执行：%s", argv[0])
 	}
 	return nil
 }
 
-var cronDenied = map[string]struct{}{
-	"sh": {}, "bash": {}, "dash": {}, "zsh": {},
-	"docker": {}, "ufw": {}, "iptables": {}, "pecl": {}, "apache2": {},
+func validateName(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("名称不能为空")
+	}
+	if len(name) > 80 {
+		return fmt.Errorf("名称过长")
+	}
+	for _, r := range name {
+		if r == '#' || !unicode.IsPrint(r) {
+			return fmt.Errorf("名称含非法字符")
+		}
+	}
+	return nil
+}
+
+func validateSchedule(schedule string) error {
+	fields := strings.Fields(strings.TrimSpace(schedule))
+	if len(fields) != 5 {
+		return fmt.Errorf("调度须为标准五段 cron")
+	}
+	bounds := [][2]int{{0, 59}, {0, 23}, {1, 31}, {1, 12}, {0, 7}}
+	for i, f := range fields {
+		if err := validateCronField(f, bounds[i][0], bounds[i][1]); err != nil {
+			return fmt.Errorf("调度第 %d 段无效", i+1)
+		}
+	}
+	return nil
+}
+
+func validateCronField(f string, min, max int) error {
+	if f == "*" {
+		return nil
+	}
+	for _, part := range strings.Split(f, ",") {
+		if part == "" {
+			return fmt.Errorf("空项")
+		}
+		base := part
+		if i := strings.IndexByte(part, '/'); i >= 0 {
+			base = part[:i]
+			n, err := strconv.Atoi(part[i+1:])
+			if err != nil || n <= 0 {
+				return fmt.Errorf("步长无效")
+			}
+		}
+		if base == "*" {
+			continue
+		}
+		if j := strings.IndexByte(base, '-'); j >= 0 {
+			a, err1 := strconv.Atoi(base[:j])
+			b, err2 := strconv.Atoi(base[j+1:])
+			if err1 != nil || err2 != nil || a < min || b > max || a > b {
+				return fmt.Errorf("范围无效")
+			}
+			continue
+		}
+		n, err := strconv.Atoi(base)
+		if err != nil || n < min || n > max {
+			return fmt.Errorf("值超出范围")
+		}
+	}
+	return nil
+}
+
+func crontabEscape(cmd string) string {
+	return strings.ReplaceAll(cmd, "%", `\%`)
 }
 
 func (s *Service) Create(ctx context.Context, name, schedule, command string, enabled bool) (Job, error) {
@@ -115,6 +176,7 @@ func (s *Service) Create(ctx context.Context, name, schedule, command string, en
 	}
 	id, _ := res.LastInsertId()
 	if err := s.syncCrontab(ctx); err != nil {
+		_, _ = s.db.SQL.Exec(`DELETE FROM cron_jobs WHERE id=?`, id)
 		return Job{}, err
 	}
 	items, err := s.List()
@@ -198,7 +260,7 @@ func (s *Service) Drifted(ctx context.Context) bool {
 		if !j.Enabled {
 			continue
 		}
-		fmt.Fprintf(&want, "# id=%d name=%s\n%s %s\n", j.ID, j.Name, j.Schedule, j.Command)
+		fmt.Fprintf(&want, "# id=%d name=%s\n%s %s\n", j.ID, j.Name, j.Schedule, crontabEscape(j.Command))
 	}
 	return strings.TrimSpace(block) != strings.TrimSpace(want.String())
 }
@@ -223,10 +285,14 @@ func (s *Service) syncCrontab(ctx context.Context) error {
 		if !j.Enabled {
 			continue
 		}
-		fmt.Fprintf(&b, "# id=%d name=%s\n%s %s\n", j.ID, j.Name, j.Schedule, j.Command)
+		fmt.Fprintf(&b, "# id=%d name=%s\n%s %s\n", j.ID, j.Name, j.Schedule, crontabEscape(j.Command))
 	}
 	b.WriteString(endMark + "\n")
-	r, err := exec.RunIO(ctx, 8*time.Second, strings.NewReader(b.String()), "/usr/bin/crontab", "-")
+	run := s.IORunner
+	if run == nil {
+		run = exec.RunIO
+	}
+	r, err := run(ctx, 8*time.Second, strings.NewReader(b.String()), "/usr/bin/crontab", "-")
 	if err != nil {
 		return fmt.Errorf("写入 crontab 失败：%s", exec.Clip(r.Stderr))
 	}

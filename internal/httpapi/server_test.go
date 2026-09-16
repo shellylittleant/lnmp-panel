@@ -587,6 +587,22 @@ func TestStage5LogsMetricsCron(t *testing.T) {
 	var job map[string]any
 	_ = json.Unmarshal(e.Data, &job)
 	id := int(job["id"].(float64))
+	code, e = doJSON(t, client, "POST", api+"/cron", csrf, map[string]any{
+		"name": "x\n* * * * * /usr/bin/true", "schedule": "* * * * *", "command": "/usr/bin/true",
+	})
+	if code == 200 && e.OK {
+		t.Fatal("名称换行应拒绝")
+	}
+	code, e = doJSON(t, client, "POST", api+"/cron", csrf, map[string]any{
+		"name": "bad", "schedule": "99 * * * *", "command": "/usr/bin/true",
+	})
+	if code == 200 && e.OK {
+		t.Fatal("非法调度应拒绝")
+	}
+	code, e = doJSON(t, client, "GET", api+"/logs/stats?site=../../etc", csrf, nil)
+	if code != 400 {
+		t.Fatalf("坏 site 应 400，得到 %d %+v", code, e)
+	}
 	code, e = doJSON(t, client, "POST", api+"/cron/"+itoa(id)+"/run", csrf, map[string]any{})
 	if code != 200 || !e.OK {
 		t.Fatalf("cron run %d %+v", code, e)
