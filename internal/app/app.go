@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"log"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -148,6 +149,12 @@ func Run(cfgPath string, skipOS bool) error {
 		fw.SkipNFT = true
 	}
 	authSvc.OnLock = func(ip string) { _ = fw.Ban(ip) }
+	fw.OnRecover = func(detail string) {
+		_ = auditSvc.Append("127.0.0.1", "system", "POST /firewall/rollback", "firewall", detail, "")
+	}
+	if err := fw.RecoverPending(context.Background()); err != nil {
+		log.Printf("启动时回滚未确认防火墙规则失败：%v", err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	sch := scheduler.New(authSvc)

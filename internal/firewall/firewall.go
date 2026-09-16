@@ -35,12 +35,17 @@ const (
 	Canonical   = "/etc/lnmp-panel/nftables.conf"
 	SystemNFT   = "/etc/nftables.conf"
 	IncludeLine = "include \"/etc/lnmp-panel/nftables.conf\"\n"
+	Placeholder = `# 占位。带 hook 的规则集只能经确认窗口写入。
+table inet lnmp_panel {
+}
+`
 )
 
 type Runner func(ctx context.Context, d time.Duration, argv ...string) (exec.Result, error)
 
 type Form struct {
 	SSHPort     int      `json:"ssh_port"`
+	SSHPorts    []int    `json:"ssh_ports"`
 	PanelPort   int      `json:"panel_port"`
 	OpenPorts   []int    `json:"open_ports"`
 	UDPPorts    []int    `json:"udp_ports"`
@@ -52,6 +57,7 @@ type Form struct {
 
 type Vars struct {
 	SSHPort     int
+	SSHPorts    []int
 	PanelPort   int
 	OpenPorts   []int
 	UDPPorts    []int
@@ -81,11 +87,15 @@ type Service struct {
 	Draft      string
 	SystemNFT  string
 	BackupRoot string
-	PanelPort  int
-	Window     time.Duration
-	SkipNFT    bool
-	mu         sync.Mutex
-	cancel     context.CancelFunc
+	PanelPort      int
+	Window         time.Duration
+	SkipNFT        bool
+	SSHConfigPaths []string
+	ProcNetTCP     string
+	ProcNetTCP6    string
+	OnRecover      func(detail string)
+	mu             sync.Mutex
+	cancel         context.CancelFunc
 }
 
 func New(db *store.DB, tpl *template.Service, st *settings.Service) *Service {
@@ -111,10 +121,17 @@ func (s *Service) run() Runner {
 
 func validPort(p int) bool { return p >= 1 && p <= 65535 }
 
-func (f *Form) normalize(panelPort int) {
-	if f.SSHPort == 0 {
-		f.SSHPort = 22
+func (f *Form) normalize(panelPort int, detectedSSH []int) {
+	if len(f.SSHPorts) == 0 && f.SSHPort > 0 {
+		f.SSHPorts = []int{f.SSHPort}
 	}
+	if len(f.SSHPorts) == 0 {
+		f.SSHPorts = detectedSSH
+	}
+	if len(f.SSHPorts) == 0 {
+		f.SSHPorts = []int{22}
+	}
+	f.SSHPort = f.SSHPorts[0]
 	if f.PanelPort == 0 {
 		f.PanelPort = panelPort
 	}
@@ -132,9 +149,21 @@ func (f *Form) normalize(panelPort int) {
 	}
 }
 
+func (s *Service) detectedSSH() []int {
+	if len(s.SSHConfigPaths) > 0 {
+		return DetectSSHPorts(s.SSHConfigPaths...)
+	}
+	return DetectSSHPorts()
+}
+
 func (f Form) validate() error {
 	if !validPort(f.SSHPort) || !validPort(f.PanelPort) {
 		return ErrPort
+	}
+	for _, p := range f.SSHPorts {
+		if !validPort(p) {
+			return ErrPort
+		}
 	}
 	if f.InputPolicy != "accept" && f.InputPolicy != "drop" {
 		return ErrPolicy
@@ -188,13 +217,7 @@ func (s *Service) Ensure() error {
 		_ = panelFS.WriteAtomic(s.SystemNFT, []byte(IncludeLine), 0644)
 	}
 	if _, err := os.Stat(s.Canonical); err != nil {
-		f := Form{}
-		f.normalize(s.panelPort())
-		body, err := s.render(f)
-		if err != nil {
-			return err
-		}
-		if err := panelFS.WriteAtomic(s.Canonical, []byte(body), 0600); err != nil {
+		if err := panelFS.WriteAtomic(s.Canonical, []byte(Placeholder), 0600); err != nil {
 			return err
 		}
 	}
@@ -224,8 +247,15 @@ func (s *Service) render(f Form) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("缺少官方 nftables 模板")
 	}
+	ports := f.SSHPorts
+	if len(ports) == 0 && f.SSHPort > 0 {
+		ports = []int{f.SSHPort}
+	}
+	if len(ports) == 0 {
+		ports = []int{22}
+	}
 	v := Vars{
-		SSHPort: f.SSHPort, PanelPort: f.PanelPort, OpenPorts: f.OpenPorts, UDPPorts: f.UDPPorts,
+		SSHPort: ports[0], SSHPorts: ports, PanelPort: f.PanelPort, OpenPorts: f.OpenPorts, UDPPorts: f.UDPPorts,
 		AllowCIDRs: f.AllowCIDRs, InputPolicy: f.InputPolicy, PublicHTTP: f.PublicHTTP,
 	}
 	return template.Render(rec.Name, rec.Content, v)
@@ -264,7 +294,7 @@ func (s *Service) Get() (View, error) {
 	v := View{
 		Form: f, Content: body, Drifted: drifted, RawMode: raw,
 		Pending: pending != "" && deadline != "", LastAppliedAt: applied,
-		SSHProtected: strings.Contains(body, fmt.Sprintf("tcp dport %d", f.SSHPort)),
+		SSHProtected: sshProtected(body, f.SSHPorts),
 		PanelProtected: strings.Contains(body, fmt.Sprintf("tcp dport %d", f.PanelPort)),
 	}
 	if v.Pending && deadline != "" {
@@ -274,7 +304,7 @@ func (s *Service) Get() (View, error) {
 }
 
 func parseForm(body string, panel int) Form {
-	f := Form{SSHPort: 22, PanelPort: panel, InputPolicy: "drop", PublicHTTP: true, OpenPorts: []int{}, UDPPorts: []int{}, AllowCIDRs: []string{}}
+	f := Form{SSHPort: 22, SSHPorts: []int{22}, PanelPort: panel, InputPolicy: "drop", PublicHTTP: true, OpenPorts: []int{}, UDPPorts: []int{}, AllowCIDRs: []string{}}
 	if strings.Contains(body, "policy accept") {
 		f.InputPolicy = "accept"
 	}
@@ -302,7 +332,7 @@ func (s *Service) Put(ctx context.Context, in Form) error {
 	if hash != "" && h != hash && !in.Force {
 		return ErrDrift
 	}
-	in.normalize(s.panelPort())
+	in.normalize(s.panelPort(), s.detectedSSH())
 	if err := in.validate(); err != nil {
 		return err
 	}
@@ -338,8 +368,8 @@ func (s *Service) PutRaw(ctx context.Context, content string, force bool) error 
 func (s *Service) UseTemplate(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	f := Form{}
-	f.normalize(s.panelPort())
+	f := Form{PublicHTTP: true}
+	f.normalize(s.panelPort(), s.detectedSSH())
 	out, err := s.render(f)
 	if err != nil {
 		return err
@@ -357,16 +387,14 @@ func (s *Service) saveForm(f Form) {
 }
 
 func (s *Service) loadForm() Form {
-	f := Form{}
-	f.normalize(s.panelPort())
-	if s.Settings == nil {
-		return f
+	f := Form{PublicHTTP: true}
+	if s.Settings != nil {
+		v, _ := s.Settings.Get("firewall_form")
+		if v != "" {
+			_ = json.Unmarshal([]byte(v), &f)
+		}
 	}
-	v, _ := s.Settings.Get("firewall_form")
-	if v != "" {
-		_ = json.Unmarshal([]byte(v), &f)
-		f.normalize(s.panelPort())
-	}
+	f.normalize(s.panelPort(), s.detectedSSH())
 	return f
 }
 
@@ -382,7 +410,7 @@ func (s *Service) writeDraft(body string, raw bool) error {
 	return err
 }
 
-func (s *Service) Apply(ctx context.Context) error {
+func (s *Service) Apply(ctx context.Context, force bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.Ensure(); err != nil {
@@ -395,6 +423,11 @@ func (s *Service) Apply(ctx context.Context) error {
 	draft := s.Draft
 	if _, err := os.Stat(draft); err != nil {
 		return ErrNoDraft
+	}
+	if !force {
+		if err := s.checkSSHListening(); err != nil {
+			return err
+		}
 	}
 	if err := s.checkFile(ctx, draft); err != nil {
 		return err
@@ -508,11 +541,73 @@ func (s *Service) dumpLive(ctx context.Context, dest string) error {
 	if err != nil {
 		return fmt.Errorf("nft list 失败：%s", exec.Clip(r.Stderr))
 	}
-	body := r.Stdout
-	if strings.TrimSpace(body) == "" {
-		body = "flush ruleset\n"
+	return panelFS.WriteAtomic(dest, []byte(withFlush(r.Stdout)), 0600)
+}
+
+func withFlush(dump string) string {
+	body := strings.TrimSpace(dump)
+	if body == "" {
+		return "flush ruleset\n"
 	}
-	return panelFS.WriteAtomic(dest, []byte(body), 0600)
+	if strings.HasPrefix(body, "flush ruleset") {
+		return body + "\n"
+	}
+	return "flush ruleset\n" + body + "\n"
+}
+
+func (s *Service) RecoverPending(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, _, pending, _, _ := s.state()
+	if pending == "" {
+		return nil
+	}
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
+	if err := s.loadFile(ctx, pending); err != nil {
+		return err
+	}
+	_, err := s.db.SQL.Exec(`UPDATE firewall_state SET pending_backup=NULL, confirm_deadline=NULL WHERE id=1`)
+	if s.OnRecover != nil {
+		s.OnRecover("确认窗口未完成，启动时已回滚")
+	}
+	return err
+}
+
+func (s *Service) checkSSHListening() error {
+	if s.SkipNFT && s.ProcNetTCP == "" && s.ProcNetTCP6 == "" {
+		return nil
+	}
+	f := s.loadForm()
+	tcp := s.ProcNetTCP
+	tcp6 := s.ProcNetTCP6
+	if tcp == "" {
+		tcp = "/proc/net/tcp"
+	}
+	if tcp6 == "" {
+		tcp6 = "/proc/net/tcp6"
+	}
+	live := readListeningPorts(tcp, tcp6)
+	for _, p := range f.SSHPorts {
+		if !live[p] {
+			return fmt.Errorf("SSH 端口 %d 上没有服务在监听，请核对", p)
+		}
+	}
+	return nil
+}
+
+func sshProtected(body string, ports []int) bool {
+	if len(ports) == 0 {
+		return strings.Contains(body, "tcp dport 22")
+	}
+	for _, p := range ports {
+		if strings.Contains(body, fmt.Sprintf("tcp dport %d", p)) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) Ban(ip string) error {

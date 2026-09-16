@@ -64,7 +64,13 @@ func (s *Server) handleFirewallRawPut(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleFirewallApply(w http.ResponseWriter, r *http.Request) {
-	if err := s.Firewall.Apply(r.Context()); err != nil {
+	var in struct {
+		Force bool `json:"force"`
+	}
+	if r.Body != nil {
+		_ = readJSON(w, r, &in)
+	}
+	if err := s.Firewall.Apply(r.Context(), in.Force); err != nil {
 		writeFWErr(w, err)
 		return
 	}

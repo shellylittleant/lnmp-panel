@@ -22,6 +22,7 @@ PY
 sleep 0.3
 umask 077
 lnmp-panel run --config /etc/lnmp-panel/panel.json >/tmp/panel.log 2>&1 &
+PANEL_PID=$!
 for i in $(seq 1 50); do
   curl -sk --max-time 1 "https://127.0.0.1:18443/${PFX}/" >/dev/null 2>&1 && break
   sleep 0.2
@@ -94,4 +95,58 @@ sleep 65
 curl -sk --max-time 5 "https://127.0.0.1:18443/${PFX}/" >/dev/null || { echo PANEL_AFTER_ROLLBACK_FAIL; nft list ruleset; cat /tmp/panel.log; exit 1; }
 reachable 22 || { echo SSH_AFTER_ROLLBACK_FAIL; nft list ruleset; exit 1; }
 echo ROLLBACK_OK
+
+# G4/S1：含显式 drop 的坏规则，超时回滚必须替换而不是叠加
+DROP='flush ruleset
+table inet lnmp_panel {
+  chain input {
+    type filter hook input priority 0; policy drop;
+    ct state established,related accept
+    tcp dport 22 drop
+    tcp dport 18443 drop
+  }
+  chain forward { type filter hook forward priority 0; policy drop; }
+  chain output { type filter hook output priority 0; policy accept; }
+}
+'
+RAW2=$(curl -sk -c /tmp/cj -b /tmp/cj -X PUT -H 'Content-Type: application/json' \
+  -H "X-CSRF-Token: $CSRF" \
+  --data-binary "{\"content\":$(python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))' <<<"$DROP"),\"force\":true}" \
+  "$API/firewall/raw")
+echo "RAW_DROP=$RAW2"
+echo "$RAW2" | grep -q '"ok":true' || { echo RAW_DROP_FAIL; exit 1; }
+APP3=$(curl -sk -c /tmp/cj -b /tmp/cj -X POST -H 'Content-Type: application/json' \
+  -H "X-CSRF-Token: $CSRF" -d '{}' "$API/firewall/apply")
+echo "APPLY_DROP=$APP3"
+echo "$APP3" | grep -q '"ok":true' || { echo APPLY_DROP_FAIL; cat /tmp/panel.log; exit 1; }
+echo WAIT_DROP_ROLLBACK
+sleep 65
+curl -sk --max-time 5 "https://127.0.0.1:18443/${PFX}/" >/dev/null || { echo PANEL_AFTER_DROP_ROLLBACK_FAIL; nft list ruleset; cat /tmp/panel.log; exit 1; }
+reachable 22 || { echo SSH_AFTER_DROP_ROLLBACK_FAIL; nft list ruleset; exit 1; }
+echo EXPLICIT_DROP_ROLLBACK_OK
+
+# G4/S2：窗口内杀进程重启后自动回滚
+RAW3=$(curl -sk -c /tmp/cj -b /tmp/cj -X PUT -H 'Content-Type: application/json' \
+  -H "X-CSRF-Token: $CSRF" \
+  --data-binary "{\"content\":$(python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))' <<<"$DROP"),\"force\":true}" \
+  "$API/firewall/raw")
+echo "RAW_KILL=$RAW3"
+echo "$RAW3" | grep -q '"ok":true' || { echo RAW_KILL_FAIL; exit 1; }
+APP4=$(curl -sk -c /tmp/cj -b /tmp/cj -X POST -H 'Content-Type: application/json' \
+  -H "X-CSRF-Token: $CSRF" -d '{}' "$API/firewall/apply")
+echo "APPLY_KILL=$APP4"
+echo "$APP4" | grep -q '"ok":true' || { echo APPLY_KILL_FAIL; cat /tmp/panel.log; exit 1; }
+kill "$PANEL_PID" || true
+sleep 0.5
+umask 077
+lnmp-panel run --config /etc/lnmp-panel/panel.json >/tmp/panel2.log 2>&1 &
+PANEL_PID=$!
+ok=0
+for i in $(seq 1 15); do
+  if reachable 22; then ok=1; break; fi
+  sleep 0.2
+done
+test "$ok" = "1" || { echo SSH_AFTER_RESTART_FAIL; nft list ruleset; cat /tmp/panel2.log; exit 1; }
+curl -sk --max-time 5 "https://127.0.0.1:18443/${PFX}/" >/dev/null || { echo PANEL_AFTER_RESTART_FAIL; nft list ruleset; cat /tmp/panel2.log; exit 1; }
+echo RESTART_RECOVER_OK
 echo STAGE4_UBUNTU_OK

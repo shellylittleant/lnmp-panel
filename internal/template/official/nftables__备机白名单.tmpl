@@ -15,10 +15,11 @@ table inet lnmp_panel {
 	chain input {
 		type filter hook input priority 0; policy drop;
 		ct state established,related accept
+		meta l4proto { icmp, ipv6-icmp } accept
 		iif lo accept
 		ip saddr @login_ban drop
-		tcp dport {{.SSHPort}} accept comment "ssh"
-		tcp dport {{.PanelPort}} accept comment "panel"
+{{range .SSHPorts}}		tcp dport {{.}} accept comment "ssh"
+{{end}}		tcp dport {{.PanelPort}} accept comment "panel"
 		tcp dport { 80, 443 } accept
 {{if .AllowCIDRs}}		ip saddr @allow_ips accept
 {{end}}	}
