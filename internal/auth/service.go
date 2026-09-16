@@ -61,9 +61,10 @@ type pending struct {
 }
 
 type Service struct {
-	db   *store.DB
-	mu   sync.Mutex
-	pend map[string]pending
+	db    *store.DB
+	mu    sync.Mutex
+	pend  map[string]pending
+	OnLock func(ip string)
 }
 
 func New(db *store.DB) *Service {
@@ -135,6 +136,9 @@ func (s *Service) recordAttempt(ip, username string, ok bool) error {
 		until := time.Now().UTC().Add(LockDuration).Format(time.RFC3339)
 		_, err = s.db.SQL.Exec(`INSERT INTO ip_locks(ip, locked_until, reason) VALUES (?, ?, 'login')
 			ON CONFLICT(ip) DO UPDATE SET locked_until = excluded.locked_until, reason = excluded.reason`, ip, until)
+		if err == nil && s.OnLock != nil {
+			s.OnLock(ip)
+		}
 		return err
 	}
 	return nil

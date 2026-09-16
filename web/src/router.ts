@@ -11,6 +11,7 @@ import SiteEdit from "./views/SiteEdit.vue";
 import Templates from "./views/Templates.vue";
 import PHP from "./views/PHP.vue";
 import MySQL from "./views/MySQL.vue";
+import Firewall from "./views/Firewall.vue";
 
 export const router = createRouter({
   history: createWebHistory(panelPrefix() + "/"),
@@ -28,7 +29,7 @@ export const router = createRouter({
         { path: "templates", component: Templates },
         { path: "php", component: PHP },
         { path: "mysql", component: MySQL },
-        { path: "firewall", component: Placeholder, props: { title: "防火墙" } },
+        { path: "firewall", component: Firewall },
         { path: "logs", component: Placeholder, props: { title: "日志" } },
         { path: "cron", component: Placeholder, props: { title: "定时任务" } },
         { path: "migrate", component: Placeholder, props: { title: "迁移" } },

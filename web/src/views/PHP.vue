@@ -233,7 +233,7 @@ const current = () => versions.value.find((v) => v.version === ver.value);
       <n-alert v-if="poolRawMode" type="info" title="原文模式">表单只读。</n-alert>
       <n-form>
         <n-form-item label="user"><n-input v-model:value="pool.user" :disabled="poolRawMode" /></n-form-item>
-        <n-form-item label="listen"><n-input v-model:value="pool.listen" :disabled="poolRawMode" /></n-form-item>
+        <n-form-item label="listen（固定，请用原文改）"><n-input v-model:value="pool.listen" disabled /></n-form-item>
         <n-form-item label="pm"><n-input v-model:value="pool.pm" :disabled="poolRawMode" /></n-form-item>
         <n-form-item label="pm.max_children"><n-input v-model:value="pool['pm.max_children']" :disabled="poolRawMode" /></n-form-item>
         <n-space>

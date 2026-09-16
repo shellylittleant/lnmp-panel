@@ -11,12 +11,14 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
 	"lnmp-panel/internal/audit"
 	"lnmp-panel/internal/auth"
 	"lnmp-panel/internal/env"
+	"lnmp-panel/internal/firewall"
 	"lnmp-panel/internal/httpapi"
 	"lnmp-panel/internal/jobs"
 	"lnmp-panel/internal/mysql"
@@ -30,7 +32,7 @@ import (
 	"lnmp-panel/internal/template"
 )
 
-const Version = "0.1.0-stage3"
+const Version = "0.1.0-stage4"
 
 func CLI(args []string) error {
 	if len(args) == 0 {
@@ -136,6 +138,16 @@ func Run(cfgPath string, skipOS bool) error {
 	phpSvc := php.New(db, tpl, jobSvc)
 	mysqlSvc := mysql.New(db, tpl, jobSvc)
 	stack := &env.StackInstaller{Jobs: jobSvc, MySQL: mysqlSvc, Codename: env.AptCodename(osInfo)}
+	fw := firewall.New(db, tpl, setSvc)
+	if _, port, err := net.SplitHostPort(cfg.Listen); err == nil {
+		if n, err := strconv.Atoi(port); err == nil {
+			fw.PanelPort = n
+		}
+	}
+	if skipOS {
+		fw.SkipNFT = true
+	}
+	authSvc.OnLock = func(ip string) { _ = fw.Ban(ip) }
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	sch := scheduler.New(authSvc)
@@ -159,6 +171,7 @@ func Run(cfgPath string, skipOS bool) error {
 		Stack:     stack,
 		PHP:       phpSvc,
 		MySQL:     mysqlSvc,
+		Firewall:  fw,
 	}
 	https := &http.Server{
 		Addr:         cfg.Listen,

@@ -53,6 +53,19 @@ func TestStage3Tables(t *testing.T) {
 	}
 }
 
+func TestFirewallStateRow(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(filepath.Join(dir, "panel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var n int
+	if err := db.SQL.QueryRow(`SELECT COUNT(1) FROM firewall_state WHERE id=1`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("firewall_state %d %v", n, err)
+	}
+}
+
 func TestJobsTable(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(filepath.Join(dir, "panel.db"))

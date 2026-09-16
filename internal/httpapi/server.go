@@ -10,6 +10,7 @@ import (
 	"lnmp-panel/internal/audit"
 	"lnmp-panel/internal/auth"
 	"lnmp-panel/internal/env"
+	"lnmp-panel/internal/firewall"
 	"lnmp-panel/internal/jobs"
 	"lnmp-panel/internal/mysql"
 	"lnmp-panel/internal/nginx"
@@ -41,6 +42,7 @@ type Server struct {
 	Stack     *env.StackInstaller
 	PHP       *php.Service
 	MySQL     *mysql.Service
+	Firewall  *firewall.Service
 }
 
 func (s *Server) Handler() http.Handler {
@@ -92,6 +94,15 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("GET /api/v1/mysql/cnf/raw", s.requireAuth(s.handleMySQLCNFGet))
 	api.HandleFunc("PUT /api/v1/mysql/cnf/raw", s.requireAuth(s.handleMySQLCNFRaw))
 	api.HandleFunc("POST /api/v1/mysql/cnf/use-template", s.requireAuth(s.handleMySQLCNFUseTpl))
+	api.HandleFunc("GET /api/v1/firewall", s.requireAuth(s.handleFirewallGet))
+	api.HandleFunc("PUT /api/v1/firewall", s.requireAuth(s.handleFirewallPut))
+	api.HandleFunc("GET /api/v1/firewall/raw", s.requireAuth(s.handleFirewallRawGet))
+	api.HandleFunc("PUT /api/v1/firewall/raw", s.requireAuth(s.handleFirewallRawPut))
+	api.HandleFunc("POST /api/v1/firewall/apply", s.requireAuth(s.handleFirewallApply))
+	api.HandleFunc("POST /api/v1/firewall/confirm", s.requireAuth(s.handleFirewallConfirm))
+	api.HandleFunc("POST /api/v1/firewall/rollback", s.requireAuth(s.handleFirewallRollback))
+	api.HandleFunc("POST /api/v1/firewall/ban", s.requireAuth(s.handleFirewallBan))
+	api.HandleFunc("POST /api/v1/firewall/use-template", s.requireAuth(s.handleFirewallUseTpl))
 	api.HandleFunc("GET /api/v1/templates", s.requireAuth(s.handleTemplates))
 	api.HandleFunc("POST /api/v1/templates", s.requireAuth(s.handleTemplateCreate))
 	api.HandleFunc("GET /api/v1/templates/{id}", s.requireAuth(s.handleTemplateGet))

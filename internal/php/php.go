@@ -815,6 +815,7 @@ func (s *Service) PutPool(ctx context.Context, ver string, in PoolVars, force bo
 		return ErrDrift
 	}
 	in = in.fill(ver, s.Socket(ver))
+	in.Listen = s.Socket(ver)
 	if err := in.validate(); err != nil {
 		return err
 	}

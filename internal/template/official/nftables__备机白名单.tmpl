@@ -1,0 +1,33 @@
+flush ruleset
+
+table inet lnmp_panel {
+	set login_ban {
+		type ipv4_addr
+		flags timeout
+		timeout 30m
+	}
+	set allow_ips {
+		type ipv4_addr
+		flags interval
+{{if .AllowCIDRs}}		elements = { {{join .AllowCIDRs ", "}} }
+{{end}}	}
+
+	chain input {
+		type filter hook input priority 0; policy drop;
+		ct state established,related accept
+		iif lo accept
+		ip saddr @login_ban drop
+		tcp dport {{.SSHPort}} accept comment "ssh"
+		tcp dport {{.PanelPort}} accept comment "panel"
+		tcp dport { 80, 443 } accept
+{{if .AllowCIDRs}}		ip saddr @allow_ips accept
+{{end}}	}
+
+	chain forward {
+		type filter hook forward priority 0; policy drop;
+	}
+
+	chain output {
+		type filter hook output priority 0; policy accept;
+	}
+}

@@ -24,6 +24,7 @@ import (
 	"lnmp-panel/internal/audit"
 	"lnmp-panel/internal/auth"
 	"lnmp-panel/internal/env"
+	"lnmp-panel/internal/firewall"
 	"lnmp-panel/internal/jobs"
 	"lnmp-panel/internal/mysql"
 	"lnmp-panel/internal/nginx"
@@ -103,6 +104,13 @@ func startTest(t *testing.T) (base, prefix, password string, client *http.Client
 			return []byte("-----BEGIN PGP PUBLIC KEY BLOCK-----\ntest\n-----END PGP PUBLIC KEY BLOCK-----\n"), nil
 		},
 	}
+	fw := firewall.New(db, tpl, st)
+	fw.SkipNFT = true
+	fw.PanelPort = 18443
+	fw.Canonical = filepath.Join(dir, "nftables.conf")
+	fw.Draft = filepath.Join(dir, "nft-draft")
+	fw.SystemNFT = filepath.Join(dir, "system-nft")
+	fw.BackupRoot = filepath.Join(dir, "nftbak")
 	prefix = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	s := &Server{
 		Prefix:    prefix,
@@ -121,6 +129,7 @@ func startTest(t *testing.T) (base, prefix, password string, client *http.Client
 		Stack:     stack,
 		PHP:       phpSvc,
 		MySQL:     mysqlSvc,
+		Firewall:  fw,
 	}
 	https := &http.Server{Handler: s.Handler()}
 	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
