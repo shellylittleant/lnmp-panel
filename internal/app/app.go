@@ -18,10 +18,13 @@ import (
 
 	"lnmp-panel/internal/audit"
 	"lnmp-panel/internal/auth"
+	"lnmp-panel/internal/cron"
 	"lnmp-panel/internal/env"
 	"lnmp-panel/internal/firewall"
 	"lnmp-panel/internal/httpapi"
 	"lnmp-panel/internal/jobs"
+	"lnmp-panel/internal/logview"
+	"lnmp-panel/internal/monitor"
 	"lnmp-panel/internal/mysql"
 	"lnmp-panel/internal/nginx"
 	"lnmp-panel/internal/php"
@@ -33,7 +36,7 @@ import (
 	"lnmp-panel/internal/template"
 )
 
-const Version = "0.1.0-stage4"
+const Version = "0.1.0-stage5"
 
 func CLI(args []string) error {
 	if len(args) == 0 {
@@ -152,13 +155,68 @@ func Run(cfgPath string, skipOS bool) error {
 	fw.OnRecover = func(detail string) {
 		_ = auditSvc.Append("127.0.0.1", "system", "POST /firewall/rollback", "firewall", detail, "")
 	}
+	if err := fw.SetupOnce(); err != nil {
+		log.Printf("防火墙一次性初始化：%v", err)
+	}
 	if err := fw.RecoverPending(context.Background()); err != nil {
 		log.Printf("启动时回滚未确认防火墙规则失败：%v", err)
 	}
+	logs := logview.New(db, tpl)
+	logs.Sites = func() []logview.SiteRef {
+		items, err := sites.List()
+		if err != nil {
+			return nil
+		}
+		out := make([]logview.SiteRef, 0, len(items))
+		for _, st := range items {
+			out = append(out, logview.SiteRef{ID: st.ID, Key: st.SiteKey, Name: st.Name})
+		}
+		return out
+	}
+	if skipOS {
+		logs.SkipExec = true
+	}
+	mon := monitor.New(db)
+	mon.Extra = func() map[string]string {
+		return map[string]string{
+			"nginx": nginxStatusLine(ngx),
+			"php":   phpSvc.StatusLine(),
+			"mysql": mysqlSvc.StatusLine(context.Background()),
+		}
+	}
+	cronSvc := cron.New(db)
+	if skipOS {
+		cronSvc.SkipExec = true
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	sch := scheduler.New(authSvc)
-	sch.SetRenewer(sslSvc)
+	sch := scheduler.New()
+	sch.Register("ssl.renew", 24*time.Hour, sslSvc.RenewDue)
+	sch.Register("log.aggregate", time.Hour, logs.AggregateHour)
+	sch.Register("metrics.sample", 15*time.Second, func(ctx context.Context) error { return mon.Sample() })
+	sch.Register("metrics.rollup", time.Hour, func(ctx context.Context) error {
+		if err := mon.Rollup(); err != nil {
+			return err
+		}
+		rawDays := 7
+		hourDays := 90
+		if v, err := setSvc.Get("metrics_raw_days"); err == nil {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				rawDays = n
+			}
+		}
+		if v, err := setSvc.Get("metrics_hourly_days"); err == nil {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				hourDays = n
+			}
+		}
+		if err := mon.Purge(rawDays); err != nil {
+			return err
+		}
+		return mon.PurgeHourly(hourDays)
+	})
+	sch.Register("session.purge", time.Hour, func(ctx context.Context) error { return authSvc.PurgeSessions() })
+	sch.Register("login_attempts.purge", 24*time.Hour, func(ctx context.Context) error { return authSvc.PurgeAttempts() })
 	go sch.Run(ctx)
 
 	srv := &httpapi.Server{
@@ -179,6 +237,10 @@ func Run(cfgPath string, skipOS bool) error {
 		PHP:       phpSvc,
 		MySQL:     mysqlSvc,
 		Firewall:  fw,
+		Logs:      logs,
+		Monitor:   mon,
+		Cron:      cronSvc,
+		Scheduler: sch,
 	}
 	https := &http.Server{
 		Addr:         cfg.Listen,
@@ -401,6 +463,13 @@ func splitComma(s string) []string {
 		}
 	}
 	return out
+}
+
+func nginxStatusLine(ngx *nginx.Service) string {
+	if ngx == nil || !ngx.Installed() {
+		return "未安装"
+	}
+	return "已安装"
 }
 
 func firstNonLoopback() string {

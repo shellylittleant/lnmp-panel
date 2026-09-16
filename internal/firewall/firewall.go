@@ -213,14 +213,20 @@ func (s *Service) Ensure() error {
 	if err := panelFS.Mkdir(s.BackupRoot, 0700); err != nil {
 		return err
 	}
-	if _, err := os.Stat(s.SystemNFT); err == nil || os.IsNotExist(err) {
-		_ = panelFS.WriteAtomic(s.SystemNFT, []byte(IncludeLine), 0644)
-	}
 	if _, err := os.Stat(s.Canonical); err != nil {
 		if err := panelFS.WriteAtomic(s.Canonical, []byte(Placeholder), 0600); err != nil {
 			return err
 		}
 	}
+	return nil
+}
+
+// SetupOnce 启动时调用一次：写 include、关掉 ufw、enable nftables。
+func (s *Service) SetupOnce() error {
+	if err := s.Ensure(); err != nil {
+		return err
+	}
+	_ = panelFS.WriteAtomic(s.SystemNFT, []byte(IncludeLine), 0644)
 	s.disableUFW()
 	return nil
 }
@@ -615,8 +621,12 @@ func (s *Service) Ban(ip string) error {
 	if parsed == nil {
 		return fmt.Errorf("无效 IP")
 	}
+	set := "login_ban"
 	if v4 := parsed.To4(); v4 != nil {
 		ip = v4.String()
+	} else {
+		set = "login_ban6"
+		ip = parsed.String()
 	}
 	if s.Settings != nil {
 		p, err := s.Settings.Public()
@@ -628,9 +638,9 @@ func (s *Service) Ban(ip string) error {
 		return nil
 	}
 	elem := "{ " + ip + " timeout 30m }"
-	r, err := s.run()(context.Background(), 5*time.Second, "/usr/sbin/nft", "add", "element", "inet", "lnmp_panel", "login_ban", elem)
+	r, err := s.run()(context.Background(), 5*time.Second, "/usr/sbin/nft", "add", "element", "inet", "lnmp_panel", set, elem)
 	if err != nil {
-		return fmt.Errorf("写入 login_ban 失败：%s", exec.Clip(r.Stderr+" "+r.Stdout))
+		return fmt.Errorf("写入 %s 失败：%s", set, exec.Clip(r.Stderr+" "+r.Stdout))
 	}
 	return nil
 }

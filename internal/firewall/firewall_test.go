@@ -149,6 +149,53 @@ func TestBanSkipsOpsIP(t *testing.T) {
 	}
 }
 
+func TestBanIPv6UsesLoginBan6(t *testing.T) {
+	s := setupFW(t)
+	s.SkipNFT = false
+	var argv [][]string
+	s.Runner = func(ctx context.Context, d time.Duration, a ...string) (exec.Result, error) {
+		argv = append(argv, append([]string{}, a...))
+		return exec.Result{}, nil
+	}
+	if err := s.Ban("2001:db8::1"); err != nil {
+		t.Fatal(err)
+	}
+	ok := false
+	for _, a := range argv {
+		joined := strings.Join(a, " ")
+		if strings.Contains(joined, "login_ban6") && strings.Contains(joined, "2001:db8::1") {
+			ok = true
+		}
+	}
+	if !ok {
+		t.Fatalf("%v", argv)
+	}
+}
+
+func TestGetDoesNotCallSystemctl(t *testing.T) {
+	s := setupFW(t)
+	s.SkipNFT = false
+	n := 0
+	s.Runner = func(ctx context.Context, d time.Duration, a ...string) (exec.Result, error) {
+		if len(a) > 0 && a[0] == "/usr/bin/systemctl" {
+			n++
+		}
+		return exec.Result{}, nil
+	}
+	if _, err := s.Get(); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("Get 不应调用 systemctl，实际 %d", n)
+	}
+	if err := s.SetupOnce(); err != nil {
+		t.Fatal(err)
+	}
+	if n == 0 {
+		t.Fatal("SetupOnce 应 disable ufw / enable nftables")
+	}
+}
+
 func TestDumpLivePrefixedWithFlush(t *testing.T) {
 	s := setupFW(t)
 	s.SkipNFT = false
@@ -227,6 +274,12 @@ func TestICMPInOfficialTemplates(t *testing.T) {
 		}
 		if !strings.Contains(rec.Content, "meta l4proto { icmp, ipv6-icmp } accept") {
 			t.Fatalf("%s 缺 ICMP", name)
+		}
+		if !strings.Contains(rec.Content, "login_ban6") {
+			t.Fatalf("%s 缺 login_ban6", name)
+		}
+		if !strings.Contains(rec.Content, "ct state invalid drop") {
+			t.Fatalf("%s 缺 invalid drop", name)
 		}
 	}
 }

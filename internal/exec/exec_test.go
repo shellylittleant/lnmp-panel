@@ -14,12 +14,26 @@ func TestRejectUnknown(t *testing.T) {
 }
 
 func TestAllowNewBins(t *testing.T) {
-	for _, b := range []string{"/usr/bin/apt-cache", "/usr/bin/dpkg-query", "/usr/sbin/mysqld", "/usr/sbin/php-fpm8.3"} {
+	for _, b := range []string{
+		"/usr/bin/apt-cache", "/usr/bin/dpkg-query", "/usr/sbin/mysqld", "/usr/sbin/php-fpm8.3",
+		"/usr/bin/journalctl", "/usr/bin/crontab", "/usr/sbin/logrotate",
+	} {
 		if !allowed(b) {
 			t.Fatalf("应允许 %s", b)
 		}
 	}
 	if allowed("/usr/bin/pecl") || allowed("/usr/bin/docker") {
 		t.Fatal("不应允许 pecl/docker")
+	}
+}
+
+func TestRunAbsRejectsShell(t *testing.T) {
+	_, err := RunAbs(context.Background(), time.Second, "/bin/bash", "-c", "echo hi")
+	if err == nil {
+		t.Fatal("应拒绝 bash")
+	}
+	_, err = RunAbs(context.Background(), time.Second, "echo", "hi")
+	if err == nil {
+		t.Fatal("应拒绝相对路径")
 	}
 }

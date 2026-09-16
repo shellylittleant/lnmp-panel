@@ -1,0 +1,234 @@
+package logview
+
+import (
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+)
+
+var accessRe = regexp.MustCompile(`^(\S+) \S+ \S+ \[([^\]]+)\] "(\S+) (\S+)[^"]*" (\d+) \d+ "([^"]*)" "([^"]*)"(?: ([0-9.]+))?`)
+
+type AccessHit struct {
+	IP, URL, Referer, UA string
+	Status               int
+	RT                   float64
+	At                   time.Time
+}
+
+func ParseAccessLine(line string) (AccessHit, bool) {
+	m := accessRe.FindStringSubmatch(line)
+	if len(m) < 7 {
+		return AccessHit{}, false
+	}
+	st, _ := strconv.Atoi(m[5])
+	t, err := time.Parse("02/Jan/2006:15:04:05 -0700", m[2])
+	if err != nil {
+		t, err = time.Parse("02/Jan/2006:15:04:05 +0000", m[2])
+	}
+	if err != nil {
+		t = time.Time{}
+	}
+	var rt float64
+	if len(m) >= 8 && m[8] != "" {
+		rt, _ = strconv.ParseFloat(m[8], 64)
+	}
+	return AccessHit{IP: m[1], URL: m[4], Referer: m[6], UA: m[7], Status: st, RT: rt, At: t}, true
+}
+
+func GuessLevel(line string) string {
+	u := strings.ToUpper(line)
+	switch {
+	case strings.Contains(u, "[ERROR]") || strings.Contains(u, " ERROR ") || strings.Contains(u, "EMERG"):
+		return "error"
+	case strings.Contains(u, "[WARN") || strings.Contains(u, " WARNING"):
+		return "warn"
+	case strings.Contains(u, "FAILED PASSWORD") || strings.Contains(u, "AUTHENTICATION FAILURE"):
+		return "error"
+	default:
+		return "info"
+	}
+}
+
+type Stats struct {
+	PV      int            `json:"pv"`
+	UV      int            `json:"uv"`
+	RTAvg   float64        `json:"rt_avg"`
+	Status  map[string]int `json:"status"`
+	URL     map[string]int `json:"url"`
+	IP      map[string]int `json:"ip"`
+	Referer map[string]int `json:"referer"`
+	UA      map[string]int `json:"ua"`
+}
+
+func AggregateAccess(lines []string) Stats {
+	s := Stats{Status: map[string]int{}, URL: map[string]int{}, IP: map[string]int{}, Referer: map[string]int{}, UA: map[string]int{}}
+	uv := map[string]bool{}
+	var rtSum float64
+	var rtN int
+	for _, ln := range lines {
+		h, ok := ParseAccessLine(ln)
+		if !ok {
+			continue
+		}
+		s.PV++
+		uv[h.IP] = true
+		s.Status[strconv.Itoa(h.Status)]++
+		s.URL[h.URL]++
+		s.IP[h.IP]++
+		if h.Referer != "" && h.Referer != "-" {
+			s.Referer[h.Referer]++
+		}
+		if h.UA != "" {
+			s.UA[h.UA]++
+		}
+		if h.RT > 0 {
+			rtSum += h.RT
+			rtN++
+		}
+	}
+	s.UV = len(uv)
+	if rtN > 0 {
+		s.RTAvg = rtSum / float64(rtN)
+	}
+	s.URL = topN(s.URL, 20)
+	s.IP = topN(s.IP, 20)
+	s.Referer = topN(s.Referer, 10)
+	s.UA = topN(s.UA, 10)
+	return s
+}
+
+type SlowItem struct {
+	Seconds float64 `json:"seconds"`
+	SQL     string  `json:"sql"`
+}
+
+func TopSlowSQL(lines []string, n int) []SlowItem {
+	var items []SlowItem
+	var pending float64
+	have := false
+	for _, ln := range lines {
+		if strings.HasPrefix(ln, "# Query_time:") {
+			fs := strings.Fields(ln)
+			if len(fs) >= 3 {
+				pending, _ = strconv.ParseFloat(fs[2], 64)
+				have = true
+			}
+			continue
+		}
+		if have && ln != "" && !strings.HasPrefix(ln, "#") && !strings.HasPrefix(ln, "SET timestamp") {
+			sql := ln
+			if len(sql) > 200 {
+				sql = sql[:200]
+			}
+			items = append(items, SlowItem{Seconds: pending, SQL: sql})
+			have = false
+		}
+	}
+	for i := 0; i < len(items); i++ {
+		for j := i + 1; j < len(items); j++ {
+			if items[j].Seconds > items[i].Seconds {
+				items[i], items[j] = items[j], items[i]
+			}
+		}
+	}
+	if n > 0 && len(items) > n {
+		items = items[:n]
+	}
+	return items
+}
+
+func LineTime(line string) time.Time {
+	if h, ok := ParseAccessLine(line); ok && !h.At.IsZero() {
+		return h.At
+	}
+	if strings.HasPrefix(line, "# Time: ") {
+		t, err := time.Parse("2006-01-02T15:04:05.999999Z", strings.TrimSpace(strings.TrimPrefix(line, "# Time: ")))
+		if err == nil {
+			return t
+		}
+	}
+	fs := strings.Fields(line)
+	if len(fs) >= 1 {
+		if t, err := time.Parse(time.RFC3339, fs[0]); err == nil {
+			return t
+		}
+		if len(fs[0]) >= 19 {
+			if t, err := time.Parse("2006-01-02T15:04:05", fs[0][:19]); err == nil {
+				return t
+			}
+		}
+	}
+	if len(fs) >= 3 {
+		raw := fs[0] + " " + fs[1] + " " + fs[2]
+		t, err := time.Parse("Jan 2 15:04:05", raw)
+		if err != nil {
+			t, err = time.Parse("Jan _2 15:04:05", raw)
+		}
+		if err == nil {
+			now := time.Now()
+			t = t.AddDate(now.Year(), 0, 0)
+			return t
+		}
+	}
+	return time.Time{}
+}
+
+func inRange(line, from, to string) bool {
+	if from == "" && to == "" {
+		return true
+	}
+	t := LineTime(line)
+	if t.IsZero() {
+		return true
+	}
+	if from != "" {
+		ft, err := time.Parse(time.RFC3339, from)
+		if err == nil && t.Before(ft) {
+			return false
+		}
+	}
+	if to != "" {
+		tt, err := time.Parse(time.RFC3339, to)
+		if err == nil && t.After(tt) {
+			return false
+		}
+	}
+	return true
+}
+
+func CountSSHFails(lines []string) int {
+	n := 0
+	for _, ln := range lines {
+		if strings.Contains(ln, "Failed password") || strings.Contains(ln, "authentication failure") {
+			n++
+		}
+	}
+	return n
+}
+
+func topN(m map[string]int, n int) map[string]int {
+	if len(m) <= n {
+		return m
+	}
+	type kv struct {
+		k string
+		v int
+	}
+	var arr []kv
+	for k, v := range m {
+		arr = append(arr, kv{k, v})
+	}
+	for i := 0; i < len(arr); i++ {
+		for j := i + 1; j < len(arr); j++ {
+			if arr[j].v > arr[i].v {
+				arr[i], arr[j] = arr[j], arr[i]
+			}
+		}
+	}
+	out := map[string]int{}
+	for i := 0; i < n && i < len(arr); i++ {
+		out[arr[i].k] = arr[i].v
+	}
+	return out
+}

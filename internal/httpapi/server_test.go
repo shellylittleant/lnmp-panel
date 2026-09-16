@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -23,12 +24,16 @@ import (
 
 	"lnmp-panel/internal/audit"
 	"lnmp-panel/internal/auth"
+	"lnmp-panel/internal/cron"
 	"lnmp-panel/internal/env"
 	"lnmp-panel/internal/firewall"
 	"lnmp-panel/internal/jobs"
+	"lnmp-panel/internal/logview"
+	"lnmp-panel/internal/monitor"
 	"lnmp-panel/internal/mysql"
 	"lnmp-panel/internal/nginx"
 	"lnmp-panel/internal/php"
+	"lnmp-panel/internal/scheduler"
 	"lnmp-panel/internal/settings"
 	"lnmp-panel/internal/site"
 	"lnmp-panel/internal/ssl"
@@ -111,6 +116,17 @@ func startTest(t *testing.T) (base, prefix, password string, client *http.Client
 	fw.Draft = filepath.Join(dir, "nft-draft")
 	fw.SystemNFT = filepath.Join(dir, "system-nft")
 	fw.BackupRoot = filepath.Join(dir, "nftbak")
+	logs := logview.New(db, tpl)
+	logs.SkipExec = true
+	logs.RotatePath = filepath.Join(dir, "logrotate")
+	logs.BackupRoot = filepath.Join(dir, "bakrot")
+	mon := monitor.New(db)
+	mon.Root = dir
+	cronSvc := cron.New(db)
+	cronSvc.SkipExec = true
+	sch := scheduler.New()
+	sch.Register("ssl.renew", 24*time.Hour, func(context.Context) error { return nil })
+	sch.Register("metrics.sample", 15*time.Second, func(context.Context) error { return nil })
 	prefix = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	s := &Server{
 		Prefix:    prefix,
@@ -130,6 +146,10 @@ func startTest(t *testing.T) (base, prefix, password string, client *http.Client
 		PHP:       phpSvc,
 		MySQL:     mysqlSvc,
 		Firewall:  fw,
+		Logs:      logs,
+		Monitor:   mon,
+		Cron:      cronSvc,
+		Scheduler: sch,
 	}
 	https := &http.Server{Handler: s.Handler()}
 	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
@@ -517,6 +537,81 @@ func TestStage3PHPMySQLAPI(t *testing.T) {
 	}
 	if !ok {
 		t.Fatal("env-install 任务未完成")
+	}
+}
+
+func TestStage5LogsMetricsCron(t *testing.T) {
+	base, prefix, pass, client, _ := startTest(t)
+	api := base + "/" + prefix + "/api/v1"
+	csrf := loginCSRF(t, client, api, "admin", pass)
+	code, e := doJSON(t, client, "GET", api+"/logs/sources", csrf, nil)
+	if code != 200 || !e.OK {
+		t.Fatalf("sources %d %+v", code, e)
+	}
+	code, e = doJSON(t, client, "GET", api+"/logs/query?source=nope", csrf, nil)
+	if code != 400 {
+		t.Fatalf("unknown source %d %+v", code, e)
+	}
+	code, e = doJSON(t, client, "GET", api+"/logs/query?source=auth", csrf, nil)
+	if code != 200 || !e.OK {
+		t.Fatalf("query %d %+v", code, e)
+	}
+	code, e = doJSON(t, client, "GET", api+"/logs/stats?kind=ssh", csrf, nil)
+	if code != 200 || !e.OK {
+		t.Fatalf("stats %d %+v", code, e)
+	}
+	code, e = doJSON(t, client, "PUT", api+"/logs/rotate", csrf, map[string]any{"keep_days": 7, "max_size": "50M"})
+	if code != 200 || !e.OK {
+		t.Fatalf("rotate %d %+v", code, e)
+	}
+	code, e = doJSON(t, client, "GET", api+"/metrics/current", csrf, nil)
+	if code != 200 || !e.OK {
+		t.Fatalf("metrics %d %+v", code, e)
+	}
+	code, e = doJSON(t, client, "GET", api+"/scheduler", csrf, nil)
+	if code != 200 || !e.OK {
+		t.Fatalf("scheduler %d %+v", code, e)
+	}
+	var sch map[string]any
+	_ = json.Unmarshal(e.Data, &sch)
+	items, _ := sch["items"].([]any)
+	if len(items) < 2 {
+		t.Fatalf("scheduler items %+v", sch)
+	}
+	code, e = doJSON(t, client, "POST", api+"/cron", csrf, map[string]any{
+		"name": "true", "schedule": "*/5 * * * *", "command": "/usr/bin/true", "enabled": true,
+	})
+	if code != 200 || !e.OK {
+		t.Fatalf("cron create %d %+v", code, e)
+	}
+	var job map[string]any
+	_ = json.Unmarshal(e.Data, &job)
+	id := int(job["id"].(float64))
+	code, e = doJSON(t, client, "POST", api+"/cron/"+itoa(id)+"/run", csrf, map[string]any{})
+	if code != 200 || !e.OK {
+		t.Fatalf("cron run %d %+v", code, e)
+	}
+	code, e = doJSON(t, client, "GET", api+"/cron", csrf, nil)
+	if code != 200 || !e.OK {
+		t.Fatalf("cron list %d %+v", code, e)
+	}
+	code, e = doJSON(t, client, "GET", api+"/status", csrf, nil)
+	if code != 200 || !e.OK {
+		t.Fatalf("status %d %+v", code, e)
+	}
+	var st map[string]any
+	_ = json.Unmarshal(e.Data, &st)
+	if st["metrics"] == nil {
+		t.Fatalf("status 应含 metrics：%s", e.Data)
+	}
+	code, e = doJSON(t, client, "GET", api+"/env", csrf, nil)
+	if code != 200 || !e.OK {
+		t.Fatalf("env %d %+v", code, e)
+	}
+	var envv map[string]any
+	_ = json.Unmarshal(e.Data, &envv)
+	if envv["mysql_source"] != "official" && envv["mysql_source"] != "ubuntu" {
+		t.Fatalf("mysql_source %+v", envv)
 	}
 }
 

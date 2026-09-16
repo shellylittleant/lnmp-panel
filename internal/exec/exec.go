@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -28,6 +29,7 @@ var allow = map[string]struct{}{
 	"/usr/bin/ssh-keygen":         {},
 	"/usr/sbin/logrotate":         {},
 	"/usr/bin/crontab":            {},
+	"/usr/bin/journalctl":         {},
 }
 
 func allowed(bin string) bool {
@@ -88,6 +90,57 @@ func RunTo(ctx context.Context, timeout time.Duration, stdin io.Reader, stdout i
 	)
 	err := cmd.Run()
 	r.Stderr = errb.String()
+	if err != nil {
+		return r, fmt.Errorf("%s：%w", argv[0], err)
+	}
+	return r, nil
+}
+
+var cronDenied = map[string]struct{}{
+	"sh": {}, "bash": {}, "dash": {}, "zsh": {},
+	"docker": {}, "ufw": {}, "iptables": {}, "pecl": {}, "apache2": {},
+}
+
+// RunAbs 仅供面板托管 crontab「立刻执行」：绝对路径、禁止 shell 与明确不做的工具。
+func RunAbs(ctx context.Context, timeout time.Duration, argv ...string) (Result, error) {
+	var r Result
+	if len(argv) == 0 {
+		return r, fmt.Errorf("空命令")
+	}
+	if !filepath.IsAbs(argv[0]) {
+		return r, fmt.Errorf("命令必须是绝对路径")
+	}
+	base := filepath.Base(argv[0])
+	if _, bad := cronDenied[base]; bad {
+		return r, fmt.Errorf("禁止执行：%s", argv[0])
+	}
+	return runUnchecked(ctx, timeout, nil, nil, argv...)
+}
+
+func runUnchecked(ctx context.Context, timeout time.Duration, stdin io.Reader, stdout io.Writer, argv ...string) (Result, error) {
+	var r Result
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	var errb bytes.Buffer
+	var out bytes.Buffer
+	if stdout != nil {
+		cmd.Stdout = stdout
+	} else {
+		cmd.Stdout = &out
+	}
+	cmd.Stderr = &errb
+	if stdin != nil {
+		cmd.Stdin = stdin
+	}
+	err := cmd.Run()
+	r.Stderr = errb.String()
+	if stdout == nil {
+		r.Stdout = out.String()
+	}
 	if err != nil {
 		return r, fmt.Errorf("%s：%w", argv[0], err)
 	}

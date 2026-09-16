@@ -83,6 +83,9 @@ type Service struct {
 	SkipExec   bool
 	PPACheck   func() bool
 	verMu      sync.Map
+	availMu    sync.Mutex
+	availAt    time.Time
+	availCache map[string]bool
 }
 
 func New(db *store.DB, tpl *template.Service, j *jobs.Service) *Service {
@@ -151,20 +154,7 @@ type Version struct {
 }
 
 func (s *Service) List(ctx context.Context) ([]Version, error) {
-	avail := map[string]bool{}
-	if !s.SkipExec {
-		r, err := s.run()(ctx, 20*time.Second, "/usr/bin/apt-cache", "search", "--names-only", "^php8\\.[0-9]+-fpm$")
-		if err == nil {
-			re := regexp.MustCompile(`php(8\.[0-9]+)-fpm`)
-			for _, line := range strings.Split(r.Stdout, "\n") {
-				if m := re.FindStringSubmatch(line); len(m) == 2 {
-					if ValidVersion(m[1]) == nil {
-						avail[m[1]] = true
-					}
-				}
-			}
-		}
-	}
+	avail := s.listAvailable(ctx)
 	ppa := true
 	if s.PPACheck != nil {
 		ppa = s.PPACheck()
@@ -214,6 +204,39 @@ func (s *Service) List(ctx context.Context) ([]Version, error) {
 		out = append(out, item)
 	}
 	return out, nil
+}
+
+func (s *Service) listAvailable(ctx context.Context) map[string]bool {
+	s.availMu.Lock()
+	defer s.availMu.Unlock()
+	if s.availCache != nil && time.Since(s.availAt) < 60*time.Second {
+		out := map[string]bool{}
+		for k, v := range s.availCache {
+			out[k] = v
+		}
+		return out
+	}
+	avail := map[string]bool{}
+	if !s.SkipExec {
+		r, err := s.run()(ctx, 20*time.Second, "/usr/bin/apt-cache", "search", "--names-only", "^php8\\.[0-9]+-fpm$")
+		if err == nil {
+			re := regexp.MustCompile(`php(8\.[0-9]+)-fpm`)
+			for _, line := range strings.Split(r.Stdout, "\n") {
+				if m := re.FindStringSubmatch(line); len(m) == 2 {
+					if ValidVersion(m[1]) == nil {
+						avail[m[1]] = true
+					}
+				}
+			}
+		}
+	}
+	s.availCache = avail
+	s.availAt = time.Now()
+	out := map[string]bool{}
+	for k, v := range avail {
+		out[k] = v
+	}
+	return out
 }
 
 func sortVersions(vs []string) {

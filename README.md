@@ -25,3 +25,5 @@ go test ./...
 安装后读 `/etc/lnmp-panel/install.info`。
 
 改前端必须跑 `./scripts/build.sh`（或 `cd web && npm run build`）重新生成 `internal/webui/dist` 并与源码一起提交。
+
+MySQL 面板账号：`lnmp_panel@localhost`，客户端默认文件 `/var/lib/lnmp-panel/secrets/mysql-panel.cnf`（0600），不改 root 认证。安装来源按架构：x86_64 官方 8.4 LTS，arm64 Ubuntu `mysql-server` 8.0。

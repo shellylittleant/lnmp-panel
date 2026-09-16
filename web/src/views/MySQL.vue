@@ -181,9 +181,16 @@ async function useTpl() {
 <template>
   <n-space vertical>
     <n-card title="MySQL">
-      <p v-if="env">官方源：{{ env.mysql_official_source ? "已配置" : "未配置" }}；{{ env.mysql }}</p>
+      <n-alert type="info" title="按架构分源">
+        x86_64 用 MySQL 官方 apt 8.4 LTS；arm64 用 Ubuntu 源 mysql-server 8.0。面板账号 lnmp_panel@localhost，密钥
+        /var/lib/lnmp-panel/secrets/mysql-panel.cnf，不改 root。
+      </n-alert>
+      <p v-if="env">
+        计划来源：{{ env.mysql_source === "official" ? "官方 8.4 LTS" : "Ubuntu mysql-server 8.0" }}；
+        官方源文件：{{ env.mysql_official_source ? "已配置" : "未配置" }}；{{ env.mysql }}
+      </p>
       <n-space>
-        <n-button type="primary" :disabled="!!busy" @click="installEnv">从官方源安装 MySQL</n-button>
+        <n-button type="primary" :disabled="!!busy" @click="installEnv">安装 MySQL</n-button>
         <span v-if="busy">{{ busy }}</span>
       </n-space>
     </n-card>

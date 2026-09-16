@@ -80,8 +80,10 @@ func TestDropSystemAndUnmanaged(t *testing.T) {
 
 func TestReservedUser(t *testing.T) {
 	s := setupMySQL(t)
-	if _, err := s.CreateUser(context.Background(), "root", "localhost", "GoodPass1", nil); err != ErrReservedUser {
-		t.Fatalf("got %v", err)
+	for _, u := range []string{"root", "lnmp_panel", "mysql.sys"} {
+		if _, err := s.CreateUser(context.Background(), u, "localhost", "GoodPass1", nil); err != ErrReservedUser {
+			t.Fatalf("%s: %v", u, err)
+		}
 	}
 }
 

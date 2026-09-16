@@ -7,7 +7,9 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
+	"lnmp-panel/internal/exec"
 	"lnmp-panel/internal/jobs"
 	"lnmp-panel/internal/store"
 	"lnmp-panel/internal/template"
@@ -171,6 +173,25 @@ func TestInstallUnavailableVersion(t *testing.T) {
 	_, err := s.StartInstall(context.Background(), "8.9")
 	if err != ErrUnavailable {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestListAvailableCached(t *testing.T) {
+	s, _ := setupPHP(t)
+	s.SkipExec = false
+	n := 0
+	s.Runner = func(ctx context.Context, d time.Duration, argv ...string) (exec.Result, error) {
+		n++
+		return exec.Result{Stdout: "php8.3-fpm - FastCGI Process Manager\n"}, nil
+	}
+	ctx := context.Background()
+	a := s.listAvailable(ctx)
+	if !a["8.3"] {
+		t.Fatalf("%v", a)
+	}
+	_ = s.listAvailable(ctx)
+	if n != 1 {
+		t.Fatalf("应缓存 60 秒，实际调用 %d 次", n)
 	}
 }
 

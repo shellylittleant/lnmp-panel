@@ -66,6 +66,27 @@ func TestFirewallStateRow(t *testing.T) {
 	}
 }
 
+func TestStage5Tables(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(filepath.Join(dir, "panel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.SQL.Exec(`INSERT INTO cron_jobs(name,schedule,command,enabled) VALUES ('x','* * * * *','/usr/bin/true',1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL.Exec(`INSERT INTO metrics_raw(at,cpu,mem_used,mem_total,disk_used,disk_total,net_in,net_out,load1) VALUES ('t',0,0,0,0,0,0,0,0)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL.Exec(`INSERT INTO metrics_hourly(bucket,cpu_avg,mem_avg,disk_avg,net_in_sum,net_out_sum,load_avg) VALUES ('t',0,0,0,0,0,0)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL.Exec(`INSERT INTO log_stats_hourly(bucket,site_id,kind,payload) VALUES ('t',0,'access','{}')`); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestJobsTable(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(filepath.Join(dir, "panel.db"))

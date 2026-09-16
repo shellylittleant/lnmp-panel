@@ -142,7 +142,7 @@ type HAService interface {
 |---|---|---|
 | GET | `/env` | Nginx/PHP/MySQL 是否已装、版本 |
 | POST | `/env/php/repo` | 添加 Ondřej PHP PPA。长时间任务，返回 `{job_id}` |
-| POST | `/env/mysql/install` | 写入 MySQL 官方源并安装 mysql-community-server。长时间任务，返回 `{job_id}`。失败不回退 Ubuntu 源 |
+| POST | `/env/mysql/install` | 按 CPU 架构分源：x86_64 写官方 apt 并装 mysql-community-server 8.4 LTS；arm64 不写官方源，装 Ubuntu `mysql-server` 8.0。长时间任务，返回 `{job_id}`。x86 上官方源无包则失败且不回退 Ubuntu 源 |
 | GET | `/php/versions` | 已装与可装（≥8.2） |
 | POST | `/php/versions/:ver/install` | apt 安装该版本 fpm/cli |
 | GET | `/php/versions/:ver/extensions` | 已装扩展 |

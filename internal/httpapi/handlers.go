@@ -228,6 +228,14 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	host, _ := os.Hostname()
+	var metrics any
+	if s.Monitor != nil {
+		sm, err := s.Monitor.Latest()
+		if err != nil {
+			sm, _ = s.Monitor.Snapshot()
+		}
+		metrics = sm
+	}
 	writeOK(w, map[string]any{
 		"hostname":    host,
 		"os":          s.OS.Pretty,
@@ -239,6 +247,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"listen":      s.Listen,
 		"path_prefix": s.Prefix,
 		"services":    map[string]string{"nginx": nginxStatus(s), "php": phpStatus(s), "mysql": mysqlStatus(s)},
+		"metrics":     metrics,
 	})
 }
 

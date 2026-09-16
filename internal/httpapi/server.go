@@ -9,12 +9,16 @@ import (
 
 	"lnmp-panel/internal/audit"
 	"lnmp-panel/internal/auth"
+	"lnmp-panel/internal/cron"
 	"lnmp-panel/internal/env"
 	"lnmp-panel/internal/firewall"
 	"lnmp-panel/internal/jobs"
+	"lnmp-panel/internal/logview"
+	"lnmp-panel/internal/monitor"
 	"lnmp-panel/internal/mysql"
 	"lnmp-panel/internal/nginx"
 	"lnmp-panel/internal/php"
+	"lnmp-panel/internal/scheduler"
 	"lnmp-panel/internal/settings"
 	"lnmp-panel/internal/site"
 	"lnmp-panel/internal/ssl"
@@ -43,6 +47,10 @@ type Server struct {
 	PHP       *php.Service
 	MySQL     *mysql.Service
 	Firewall  *firewall.Service
+	Logs      *logview.Service
+	Monitor   *monitor.Service
+	Cron      *cron.Service
+	Scheduler *scheduler.Scheduler
 }
 
 func (s *Server) Handler() http.Handler {
@@ -103,6 +111,20 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("POST /api/v1/firewall/rollback", s.requireAuth(s.handleFirewallRollback))
 	api.HandleFunc("POST /api/v1/firewall/ban", s.requireAuth(s.handleFirewallBan))
 	api.HandleFunc("POST /api/v1/firewall/use-template", s.requireAuth(s.handleFirewallUseTpl))
+	api.HandleFunc("GET /api/v1/logs/sources", s.requireAuth(s.handleLogSources))
+	api.HandleFunc("GET /api/v1/logs/query", s.requireAuth(s.handleLogQuery))
+	api.HandleFunc("GET /api/v1/logs/follow", s.requireAuth(s.handleLogFollow))
+	api.HandleFunc("GET /api/v1/logs/stats", s.requireAuth(s.handleLogStats))
+	api.HandleFunc("GET /api/v1/logs/rotate", s.requireAuth(s.handleLogRotateGet))
+	api.HandleFunc("PUT /api/v1/logs/rotate", s.requireAuth(s.handleLogRotatePut))
+	api.HandleFunc("GET /api/v1/metrics/current", s.requireAuth(s.handleMetricsCurrent))
+	api.HandleFunc("GET /api/v1/metrics/history", s.requireAuth(s.handleMetricsHistory))
+	api.HandleFunc("GET /api/v1/cron", s.requireAuth(s.handleCronList))
+	api.HandleFunc("POST /api/v1/cron", s.requireAuth(s.handleCronCreate))
+	api.HandleFunc("PUT /api/v1/cron/{id}", s.requireAuth(s.handleCronPut))
+	api.HandleFunc("DELETE /api/v1/cron/{id}", s.requireAuth(s.handleCronDelete))
+	api.HandleFunc("POST /api/v1/cron/{id}/run", s.requireAuth(s.handleCronRun))
+	api.HandleFunc("GET /api/v1/scheduler", s.requireAuth(s.handleScheduler))
 	api.HandleFunc("GET /api/v1/templates", s.requireAuth(s.handleTemplates))
 	api.HandleFunc("POST /api/v1/templates", s.requireAuth(s.handleTemplateCreate))
 	api.HandleFunc("GET /api/v1/templates/{id}", s.requireAuth(s.handleTemplateGet))
@@ -219,6 +241,14 @@ type statusWriter struct {
 func (w *statusWriter) WriteHeader(code int) {
 	w.code = code
 	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+func (w *statusWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 func (s *Server) requireAuth(h http.HandlerFunc) http.HandlerFunc {

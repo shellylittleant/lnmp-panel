@@ -45,6 +45,7 @@ var systemDBs = map[string]bool{
 
 var reservedUsers = map[string]bool{
 	"root": true, "mysql.sys": true, "mysql.session": true, "mysql.infoschema": true,
+	"lnmp_panel": true, "debian-sys-maint": true,
 }
 
 var identRe = regexp.MustCompile(`^[A-Za-z0-9_]{1,64}$`)
@@ -94,7 +95,7 @@ func New(db *store.DB, tpl *template.Service, j *jobs.Service) *Service {
 		Jobs:       j,
 		Runner:     exec.Run,
 		CNFPath:    "/etc/mysql/mysql.conf.d/lnmp-panel.cnf",
-		Defaults:   "/var/lib/lnmp-panel/secrets/mysql-root.cnf",
+		Defaults:   "/var/lib/lnmp-panel/secrets/mysql-panel.cnf",
 		Socket:     "/var/run/mysqld/mysqld.sock",
 		BackupRoot: "/var/lib/lnmp-panel/backups/mysql",
 		TmpDir:     "/var/lib/lnmp-panel/tmp",
@@ -485,8 +486,13 @@ func (s *Service) admin(ctx context.Context, extra ...string) error {
 }
 
 func (s *Service) clientArgs(bin string) []string {
-	if _, err := os.Stat(s.Defaults); err == nil {
-		return []string{bin, "--defaults-extra-file=" + s.Defaults}
+	for _, p := range []string{s.Defaults, filepath.Join(filepath.Dir(s.Defaults), "mysql-root.cnf")} {
+		if p == "" {
+			continue
+		}
+		if _, err := os.Stat(p); err == nil {
+			return []string{bin, "--defaults-extra-file=" + p}
+		}
 	}
 	return []string{bin, "-uroot"}
 }
@@ -520,6 +526,11 @@ func (s *Service) Exec(ctx context.Context, sqlText string) (string, error) {
 }
 
 func (s *Service) EnsureRoot(ctx context.Context) error {
+	return s.EnsurePanelUser(ctx)
+}
+
+// EnsurePanelUser 创建 lnmp_panel@localhost，不改 root 认证。
+func (s *Service) EnsurePanelUser(ctx context.Context) error {
 	if s.SkipExec {
 		return nil
 	}
@@ -538,22 +549,22 @@ func (s *Service) EnsureRoot(ctx context.Context) error {
 		}
 	}
 	pass := randomPass()
+	stmt := "CREATE USER IF NOT EXISTS 'lnmp_panel'@'localhost' IDENTIFIED BY " + quoteSQL(pass) +
+		"; ALTER USER 'lnmp_panel'@'localhost' IDENTIFIED BY " + quoteSQL(pass) +
+		"; GRANT ALL ON *.* TO 'lnmp_panel'@'localhost' WITH GRANT OPTION; FLUSH PRIVILEGES;"
+	r, err := s.runIO()(ctx, 20*time.Second, strings.NewReader(stmt), "/usr/bin/mysql", "-uroot")
+	if err != nil {
+		return fmt.Errorf("创建面板账号 lnmp_panel 失败：%s", exec.Clip(r.Stderr+" "+r.Stdout))
+	}
 	if err := panelFS.Mkdir(filepath.Dir(s.Defaults), 0700); err != nil {
 		return err
 	}
-	body := fmt.Sprintf("[client]\nuser=root\npassword=%q\nsocket=%s\n", pass, s.Socket)
+	body := fmt.Sprintf("[client]\nuser=lnmp_panel\npassword=%q\nsocket=%s\n", pass, s.Socket)
 	if err := panelFS.WriteAtomic(s.Defaults, []byte(body), 0600); err != nil {
 		return err
 	}
-	stmt := "ALTER USER 'root'@'localhost' IDENTIFIED BY " + quoteSQL(pass) + "; FLUSH PRIVILEGES;"
-	args := []string{"/usr/bin/mysql", "-uroot"}
-	r, err := s.runIO()(ctx, 20*time.Second, strings.NewReader(stmt), args...)
-	if err != nil {
-		if err2 := s.admin(ctx, "ping"); err2 == nil {
-			return nil
-		}
-		_ = os.Remove(s.Defaults)
-		return fmt.Errorf("设置 root 密码失败：%s", exec.Clip(r.Stderr+" "+r.Stdout))
+	if err := s.admin(ctx, "ping"); err != nil {
+		return fmt.Errorf("面板账号无法连接：%w", err)
 	}
 	return nil
 }

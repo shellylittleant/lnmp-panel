@@ -28,6 +28,10 @@ func (s *Server) handleEnv(w http.ResponseWriter, r *http.Request) {
 			phpPPA = php.PPAPresent()
 		}
 	}
+	mysqlSource := "ubuntu"
+	if s.Stack != nil {
+		mysqlSource = s.Stack.MySQLSource()
+	}
 	if s.MySQL != nil {
 		mysqlLine = s.MySQL.StatusLine(r.Context())
 		mysqlOn = s.MySQL.Installed()
@@ -38,6 +42,7 @@ func (s *Server) handleEnv(w http.ResponseWriter, r *http.Request) {
 		"php":                   phpLine,
 		"php_ppa":               phpPPA,
 		"mysql":                 mysqlLine,
+		"mysql_source":          mysqlSource,
 		"mysql_official_source": mysql.OfficialPresent(),
 		"mysql_installed":       mysqlOn,
 	})

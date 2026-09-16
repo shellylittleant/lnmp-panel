@@ -32,6 +32,26 @@ type StackInstaller struct {
 	SkipExec bool
 	KeyPath  string
 	ListPath string
+	Arch     string // 空则用 runtime.GOARCH；测试可注入
+}
+
+func (s *StackInstaller) arch() string {
+	if s.Arch != "" {
+		return s.Arch
+	}
+	return runtime.GOARCH
+}
+
+func (s *StackInstaller) useOfficialMySQL() bool {
+	a := s.arch()
+	return a == "amd64" || a == "386"
+}
+
+func (s *StackInstaller) MySQLSource() string {
+	if s.useOfficialMySQL() {
+		return "official"
+	}
+	return "ubuntu"
 }
 
 func (s *StackInstaller) run() func(ctx context.Context, d time.Duration, argv ...string) (exec.Result, error) {
@@ -89,41 +109,52 @@ func (s *StackInstaller) runPHPRepo(ctx context.Context, id string) {
 
 func (s *StackInstaller) runMySQL(ctx context.Context, id string) {
 	run := s.run()
-	s.Jobs.Update(id, "mysql-repo", "写入 MySQL 官方 apt 源", 20)
-	if err := s.writeMySQLRepo(); err != nil {
-		s.Jobs.Finish(id, err)
-		return
+	official := s.useOfficialMySQL()
+	if official {
+		s.Jobs.Update(id, "mysql-repo", "写入 MySQL 官方 apt 源（x86_64）", 20)
+		if err := s.writeMySQLRepo(); err != nil {
+			s.Jobs.Finish(id, err)
+			return
+		}
+	} else {
+		s.Jobs.Update(id, "mysql-ubuntu", "arm64 使用 Ubuntu 源 mysql-server 8.0（docs/02 分源）", 20)
 	}
 	if !s.SkipExec {
-		s.Jobs.Update(id, "apt-update", "更新索引（官方 MySQL）", 40)
+		s.Jobs.Update(id, "apt-update", "更新软件包索引", 40)
 		if r, err := run(ctx, 5*time.Minute, "/usr/bin/apt-get", "update"); err != nil {
-			s.Jobs.Finish(id, fmt.Errorf("官方源 apt-get update 失败（未回退 Ubuntu mysql）：%s", exec.Clip(r.Stderr+" "+r.Stdout)))
+			s.Jobs.Finish(id, fmt.Errorf("apt-get update 失败：%s", exec.Clip(r.Stderr+" "+r.Stdout)))
 			return
 		}
 		if s.MySQL != nil && s.MySQL.MariaDB(ctx) {
 			s.Jobs.Finish(id, mysql.ErrMariaDB)
 			return
 		}
-		s.Jobs.Update(id, "mysql-pkg", "从官方源安装 mysql-community-server", 70)
-		show, err := run(ctx, 30*time.Second, "/usr/bin/apt-cache", "show", "mysql-community-server")
-		if err != nil || !strings.Contains(show.Stdout, "Package: mysql-community-server") {
-			s.Jobs.Finish(id, fmt.Errorf("MySQL 官方源没有 mysql-community-server（当前架构 %s）。官方 noble 仓库目前只有 amd64/i386。未回退 Ubuntu 的 mysql-server", runtime.GOARCH))
-			return
+		pkgs := []string{"mysql-server", "mysql-client"}
+		label := "从 Ubuntu 源安装 mysql-server"
+		if official {
+			pkgs = []string{"mysql-community-server", "mysql-community-client"}
+			label = "从官方源安装 mysql-community-server"
+			show, err := run(ctx, 30*time.Second, "/usr/bin/apt-cache", "show", "mysql-community-server")
+			if err != nil || !strings.Contains(show.Stdout, "Package: mysql-community-server") {
+				s.Jobs.Finish(id, fmt.Errorf("MySQL 官方源没有 mysql-community-server（架构 %s），未回退 Ubuntu 源", s.arch()))
+				return
+			}
 		}
-		r, err := run(ctx, 15*time.Minute, "/usr/bin/apt-get", "install", "-y",
+		s.Jobs.Update(id, "mysql-pkg", label, 70)
+		args := append([]string{"/usr/bin/apt-get", "install", "-y",
 			"-o", "Dpkg::Options::=--force-confdef",
-			"-o", "Dpkg::Options::=--force-confold",
-			"mysql-community-server", "mysql-community-client")
+			"-o", "Dpkg::Options::=--force-confold"}, pkgs...)
+		r, err := run(ctx, 15*time.Minute, args...)
 		if err != nil {
 			if s.MySQL == nil || !s.MySQL.Installed() {
-				s.Jobs.Finish(id, fmt.Errorf("安装 mysql-community-server 失败（未回退 Ubuntu 源）：%s", exec.Clip(r.Stderr+" "+r.Stdout)))
+				s.Jobs.Finish(id, fmt.Errorf("安装 MySQL 失败：%s", exec.Clip(r.Stderr+" "+r.Stdout)))
 				return
 			}
 		}
 	}
-	s.Jobs.Update(id, "mysql-bootstrap", "启动 MySQL 并写入面板片段", 90)
+	s.Jobs.Update(id, "mysql-bootstrap", "创建面板账号并写入片段", 90)
 	if s.MySQL != nil {
-		if err := s.MySQL.EnsureRoot(ctx); err != nil {
+		if err := s.MySQL.EnsurePanelUser(ctx); err != nil {
 			s.Jobs.Finish(id, err)
 			return
 		}
