@@ -100,6 +100,7 @@ type HAService interface {
 | GET | `/status` | 否 | 进程、OS、磁盘、服务是否在跑（阶段 1 给 OS/进程；服务项阶段 3/5 填） |
 | GET | `/audit` | 否 | 查询参数 `from,to,action,ip` |
 | POST | `/panel/restart` | 是 | 重启自身（改端口后） |
+| GET | `/jobs/:id` | 否 | 长任务进度。阶段 1 建表即可，真实任务从阶段 3 起 |
 
 ## 3. 模板（阶段 2 起，表阶段 1 可先建）
 
@@ -119,6 +120,7 @@ type HAService interface {
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
+| POST | `/env/nginx/install` | 从 Ubuntu 源安装 Nginx。长时间任务，返回 `{job_id}`，进度 `GET /jobs/:id` |
 | GET | `/sites` | 列表 |
 | POST | `/sites` | 建站：域名、根目录、PHP 版本、模板选择 |
 | GET | `/sites/:id` | 详情 + `drifted` + 所用模板 |
@@ -139,8 +141,7 @@ type HAService interface {
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/env` | Nginx/PHP/MySQL 是否已装、版本 |
-| POST | `/env/install` | 裸系统安装 LNMP（可指定 PHP 版本列表）。长时间任务，返回 job id |
-| GET | `/env/jobs/:id` | 安装进度 |
+| POST | `/env/install` | 安装 PHP PPA 与 MySQL（Nginx 在阶段 2 的对应接口安装）。长时间任务，返回 `{job_id}`，进度只查 `GET /jobs/:id` |
 | GET | `/php/versions` | 已装与可装（≥8.2） |
 | POST | `/php/versions/:ver/install` | apt 安装该版本 fpm/cli |
 | GET | `/php/versions/:ver/extensions` | 已装扩展 |
@@ -162,7 +163,7 @@ type HAService interface {
 | GET/PUT | `/mysql/cnf` | 面板托管片段表单 |
 | GET/PUT | `/mysql/cnf/raw` | 原文 |
 
-长时间 apt/导入：统一 job 模型 `GET /jobs/:id`（阶段 3 引入），避免 HTTP 卡死。
+长时间 apt/导入：只走 `GET /jobs/:id`，禁止再开 `/env/jobs/:id` 之类第二入口。
 
 ## 6. 防火墙（阶段 4）
 
@@ -201,8 +202,8 @@ type HAService interface {
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/migrate/token` | B 机生成一次性令牌，短 TTL |
-| POST | `/migrate/connect` | A 机：`{address, token}` 握手，换临时 SSH 钥 |
+| POST | `/migrate/token` | B 机生成一次性令牌，短 TTL。明文为 `<证书SHA-256指纹前16位hex>.<随机串>` |
+| POST | `/migrate/connect` | A 机：`{address, token}`。先按令牌首段校验 B 的 TLS 指纹，通过后才发令牌；成功后把完整指纹写入 `peers.fingerprint` 并固定 |
 | POST | `/migrate/preflight` | B 执行：OS、磁盘、端口、PHP/MySQL 可装 |
 | POST | `/migrate/start` | `{mode: full\|incr}` |
 | GET | `/migrate/status` | 进度 |
@@ -220,8 +221,8 @@ type HAService interface {
 | POST | `/ha/pair` | 复用配对令牌机制 |
 | POST | `/ha/promote` | **启用主模式**：停收同步、MySQL 可写、启用站点 |
 | POST | `/ha/demote` | 降级为备：404 模式、只读、白名单防火墙 |
-| POST | `/ha/sync/start` | 开始从当前主机拉 |
-| GET | `/ha/sync/status` | |
+| POST | `/ha/sync/start` | **备机**开始从主机拉：rsync、配置、确认复制在跑。主机调用返回错误 |
+| GET | `/ha/sync/status` | 落后时间、上一轮扫描耗时、复制状态 |
 | GET | `/ha/health` | 本机健康，供对端查询 |
 | GET | `/ha/peer-role` | 返回本机角色与 term；**供对端启动自我保护**。此接口仍需双方配对后的机器身份，不能对公网匿名打开 |
 
