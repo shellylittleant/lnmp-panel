@@ -1,0 +1,77 @@
+<script setup lang="ts">
+import { onMounted, ref } from "vue";
+import { useRouter } from "vue-router";
+import { NLayout, NLayoutSider, NLayoutContent, NMenu, NButton, NSpace } from "naive-ui";
+import type { MenuOption } from "naive-ui";
+import { api, setCsrf } from "../api";
+
+const router = useRouter();
+const user = ref("");
+
+const menu: MenuOption[] = [
+  { label: "概览", key: "/" },
+  { label: "网站", key: "/sites" },
+  { label: "PHP", key: "/php" },
+  { label: "数据库", key: "/mysql" },
+  { label: "防火墙", key: "/firewall" },
+  { label: "日志", key: "/logs" },
+  { label: "定时任务", key: "/cron" },
+  { label: "迁移", key: "/migrate" },
+  { label: "热备", key: "/ha" },
+  { label: "插件", key: "/plugins" },
+  { label: "设置", key: "/settings" },
+  { label: "审计", key: "/audit" },
+];
+
+onMounted(async () => {
+  const r = await api<{ username: string; csrf_token: string }>("GET", "/auth/session");
+  if (!r.ok) {
+    router.replace("/login");
+    return;
+  }
+  user.value = r.data.username;
+  setCsrf(r.data.csrf_token);
+});
+
+async function logout() {
+  await api("POST", "/auth/logout", {});
+  router.replace("/login");
+}
+
+function go(key: string) {
+  router.push(key);
+}
+</script>
+
+<template>
+  <n-layout has-sider style="height: 100%">
+    <n-layout-sider bordered width="200" content-style="padding: 12px 0">
+      <div class="brand">LNMP 面板</div>
+      <n-menu :options="menu" :value="$route.path" @update:value="go" />
+    </n-layout-sider>
+    <n-layout>
+      <div class="top">
+        <n-space>
+          <span>{{ user }}</span>
+          <n-button size="small" @click="logout">退出</n-button>
+        </n-space>
+      </div>
+      <n-layout-content content-style="padding: 20px">
+        <router-view />
+      </n-layout-content>
+    </n-layout>
+  </n-layout>
+</template>
+
+<style scoped>
+.brand {
+  padding: 8px 20px 16px;
+  font-weight: 600;
+}
+.top {
+  display: flex;
+  justify-content: flex-end;
+  padding: 10px 16px;
+  border-bottom: 1px solid #eee;
+}
+</style>

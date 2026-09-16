@@ -1,21 +1,25 @@
 # grok 工作区
 
-本目录是执行者 **grok** 的独立 git 仓库。代码与架构文档只写在这里。
+执行者 **grok** 的独立 git 仓库。
 
-阶段报告写在项目根的 `docs/reports/grok/`，不在本仓库内。
+## 阶段 0
 
-## 阶段 0 产出
+架构文档在 `docs/`。审核必须项 M1～M9 已修订，commit 见 git log。
 
-架构文档在 `docs/`：
+## 阶段 1
 
-| 文件 | 内容 |
-|---|---|
-| [docs/00-总体架构与路线图.md](docs/00-总体架构与路线图.md) | 分层架构、安全落地、路径约定、依赖、路线图 |
-| [docs/01-模块划分.md](docs/01-模块划分.md) | 模块职责、依赖、阶段归属 |
-| [docs/02-目录结构.md](docs/02-目录结构.md) | 仓库目录与目标机目录 |
-| [docs/03-数据模型.md](docs/03-数据模型.md) | SQLite 表结构 |
-| [docs/04-内部API清单.md](docs/04-内部API清单.md) | Go 服务接口与 HTTP API |
-| [docs/05-插件接口草案.md](docs/05-插件接口草案.md) | 编译期插件、钩子、官方插件 |
-| [docs/06-模板机制设计.md](docs/06-模板机制设计.md) | 模板类型、渲染、手改读回 |
+面板骨架：Go HTTPS 服务、登录/TOTP/会话/审计、SQLite、Vue 3 壳、安装脚本、systemd。
 
-阶段 0 **不包含任何业务代码**。代码从阶段 1 开始写。
+```bash
+# 构建（需 Node 与 Go）
+./scripts/build.sh
+
+# 仅测试
+go test ./...
+
+# Ubuntu 24.04 上安装（root）
+./scripts/install.sh
+```
+
+二进制：`bin/lnmp-panel`  
+安装后读 `/etc/lnmp-panel/install.info`。

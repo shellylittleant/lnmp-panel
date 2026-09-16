@@ -2,10 +2,8 @@
 *.swp
 *.tmp
 /bin/
-/dist/
 /web/node_modules/
-/web/dist/
-*.db
-*.db-journal
 coverage/
 .env
+*.db
+*.db-journal

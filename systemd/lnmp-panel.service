@@ -1,0 +1,15 @@
+[Unit]
+Description=LNMP 面板
+After=network.target nftables.service
+Wants=nftables.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/lnmp-panel run --config /etc/lnmp-panel/panel.json
+Restart=on-failure
+RestartSec=2
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
