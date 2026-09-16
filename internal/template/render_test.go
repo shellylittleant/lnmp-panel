@@ -59,3 +59,31 @@ func TestEnsureUserDedupe(t *testing.T) {
 		t.Fatal("相同内容应去重")
 	}
 }
+
+func TestImportUsesGivenName(t *testing.T) {
+	dir := t.TempDir()
+	db, err := store.Open(filepath.Join(dir, "p.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := New(db)
+	id, err := s.Import("nginx_rewrite", "我的规则", "location / { # unique }\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := s.Get(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Name != "我的规则" {
+		t.Fatalf("导入应保留名字，得到 %s", r.Name)
+	}
+	id2, err := s.Import("nginx_rewrite", "另一个名", "location / { # unique }\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id2 != id {
+		t.Fatal("相同哈希应返回已有 ID")
+	}
+}

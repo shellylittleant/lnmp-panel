@@ -17,6 +17,7 @@ import (
 	"time"
 
 	panelFS "lnmp-panel/internal/fs"
+	"lnmp-panel/internal/nginx"
 	"lnmp-panel/internal/site"
 	"lnmp-panel/internal/store"
 )
@@ -50,7 +51,7 @@ func New(db *store.DB, sites *site.Service) *Service {
 		db:      db,
 		sites:   sites,
 		Dir:     "/var/lib/lnmp-panel/tls/sites",
-		AcmeWWW: "/var/lib/lnmp-panel/acme-www",
+		AcmeWWW: nginx.AcmeDir,
 		Issuer:  SelfSigner{},
 	}
 }
@@ -93,11 +94,26 @@ func (s *Service) Issue(ctx context.Context, siteID int64) error {
 	if err := os.MkdirAll(s.AcmeWWW, 0755); err != nil {
 		return err
 	}
+	_ = os.Chmod(s.AcmeWWW, 0755)
+	var tokens []string
 	certPEM, keyPEM, issuer, notAfter, err := s.Issuer.Issue(ctx, st.Domains, func(token, content string) error {
-		return os.WriteFile(filepath.Join(s.AcmeWWW, token), []byte(content), 0644)
+		tokens = append(tokens, token)
+		p := filepath.Join(s.AcmeWWW, token)
+		if err := os.WriteFile(p, []byte(content), 0644); err != nil {
+			return err
+		}
+		return os.Chmod(p, 0644)
 	})
+	defer func() {
+		for _, t := range tokens {
+			_ = os.Remove(filepath.Join(s.AcmeWWW, t))
+		}
+	}()
 	if err != nil {
 		return err
+	}
+	if t, err := leafNotAfter(certPEM); err == nil {
+		notAfter = t
 	}
 	dir := filepath.Join(s.Dir, fmt.Sprintf("%d", siteID))
 	if err := os.MkdirAll(dir, 0700); err != nil {
@@ -112,12 +128,35 @@ func (s *Service) Issue(ctx context.Context, siteID int64) error {
 		return err
 	}
 	dom, _ := json.Marshal(st.Domains)
-	_, err = s.db.SQL.Exec(`INSERT INTO certificates(site_id, domains, issuer, cert_path, key_path, expires_at, challenge, created_at)
-		VALUES (?,?,?,?,?,?, 'http-01', ?)`, siteID, string(dom), issuer, certPath, keyPath, notAfter.UTC().Format(time.RFC3339), s.db.Now())
+	tx, err := s.db.SQL.Begin()
 	if err != nil {
 		return err
 	}
+	if _, err := tx.Exec(`DELETE FROM certificates WHERE site_id=?`, siteID); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO certificates(site_id, domains, issuer, cert_path, key_path, expires_at, challenge, created_at)
+		VALUES (?,?,?,?,?,?, 'http-01', ?)`, siteID, string(dom), issuer, certPath, keyPath, notAfter.UTC().Format(time.RFC3339), s.db.Now()); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
 	return s.sites.ApplyConf(ctx, siteID)
+}
+
+func leafNotAfter(certPEM []byte) (time.Time, error) {
+	block, _ := pem.Decode(certPEM)
+	if block == nil {
+		return time.Time{}, fmt.Errorf("无证书")
+	}
+	c, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return c.NotAfter, nil
 }
 
 func (s *Service) RenewDue(ctx context.Context) error {
@@ -137,7 +176,7 @@ func (s *Service) RenewDue(ctx context.Context) error {
 	}
 	for _, id := range ids {
 		if err := s.Issue(ctx, id); err != nil {
-			return fmt.Errorf("站点 %d 续期失败：%w", id, err)
+			fmt.Printf("站点 %d 续期失败：%v\n", id, err)
 		}
 	}
 	return nil

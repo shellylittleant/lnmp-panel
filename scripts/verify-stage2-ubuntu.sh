@@ -1,5 +1,5 @@
 #!/bin/bash
-# 在 Ubuntu 24.04 容器内跑：bootstrap、登录、安装 Nginx、建站、nginx -t。
+# 只做用户会做的动作。不手动启动 nginx。面板必须在 umask 077 下运行。
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
@@ -9,6 +9,7 @@ PFX=abcdef0123456789abcdef0123456789
 lnmp-panel bootstrap --data-dir /var/lib/lnmp-panel --etc-dir /etc/lnmp-panel \
   --listen 127.0.0.1:18443 --prefix "$PFX" --password 'GoodPassw0rd!'
 echo BOOTSTRAP_OK
+umask 077
 lnmp-panel run --config /etc/lnmp-panel/panel.json >/tmp/panel.log 2>&1 &
 for i in $(seq 1 50); do
   curl -sk --max-time 1 "https://127.0.0.1:18443/${PFX}/" >/dev/null 2>&1 && break
@@ -32,29 +33,41 @@ for i in $(seq 1 90); do
   echo "$ST" | grep -q '"phase":"failed"' && { echo FAIL_JOB; cat /tmp/panel.log; exit 1; }
   sleep 2
 done
-echo "$ST" | grep -q '"phase":"done"' || { echo JOB_TIMEOUT; exit 1; }
-echo NGINX_BIN=$(command -v nginx || true)
-nginx -t
-if ! pidof nginx >/dev/null 2>&1; then
-  nginx
-fi
+echo "$ST" | grep -q '"phase":"done"' || { echo JOB_TIMEOUT; cat /tmp/panel.log; exit 1; }
 CREATE=$(curl -sk -c /tmp/cj -b /tmp/cj -X POST -H 'Content-Type: application/json' \
   -H "X-CSRF-Token: $CSRF" \
   -d '{"site_key":"demo","name":"演示","domains":["demo.test"]}' "$API/sites")
 echo "CREATE=$CREATE"
-echo "$CREATE" | grep -q '"ok":true' || { echo CREATE_FAIL; exit 1; }
-nginx -t
+echo "$CREATE" | grep -q '"ok":true' || { echo CREATE_FAIL; cat /tmp/panel.log; exit 1; }
 test -f /etc/nginx/sites-available/demo.conf
 grep -q 'server_name demo.test' /etc/nginx/sites-available/demo.conf
 grep -q 'log_format lnmp_panel' /etc/nginx/conf.d/lnmp-panel.conf
-ls -l /etc/nginx/sites-enabled || true
-ps aux | grep '[n]ginx' || true
-(command -v ss >/dev/null && ss -lnt) || netstat -lnt 2>/dev/null || true
-nginx || true
-code=$(curl -sS -o /tmp/body -w '%{http_code}' --connect-timeout 3 -H 'Host: demo.test' http://127.0.0.1/ || echo curl_fail)
+grep -q '/var/www/.acme-challenge/' /etc/nginx/sites-available/demo.conf
+DIRMODE=$(stat -c '%a' /var/www/demo)
+FILEMODE=$(stat -c '%a' /var/www/demo/index.html)
+echo "DIRMODE=$DIRMODE FILEMODE=$FILEMODE"
+test "$DIRMODE" = "755"
+test "$FILEMODE" = "644"
+# 面板必须已经把 nginx 拉起来，脚本不得执行 nginx
+code=$(curl -sS -o /tmp/body -w '%{http_code}' --connect-timeout 5 -H 'Host: demo.test' http://127.0.0.1/ || echo curl_fail)
 echo "HTTP_HOST=$code"
 cat /tmp/body 2>/dev/null || true
 test "$code" = "200"
+# ACME 路径 www-data 可读
+install -d -m 0755 /var/www/.acme-challenge
+echo 'challenge-ok' >/var/www/.acme-challenge/tok
+chmod 0644 /var/www/.acme-challenge/tok
+acme=$(curl -sS -o /tmp/acme -w '%{http_code}' --connect-timeout 5 -H 'Host: demo.test' \
+  http://127.0.0.1/.well-known/acme-challenge/tok || echo fail)
+echo "ACME=$acme $(cat /tmp/acme 2>/dev/null || true)"
+test "$acme" = "200"
+grep -q challenge-ok /tmp/acme
+# 注入域名必须拒绝
+BAD=$(curl -sk -c /tmp/cj -b /tmp/cj -X POST -H 'Content-Type: application/json' \
+  -H "X-CSRF-Token: $CSRF" \
+  -d '{"site_key":"evil","name":"x","domains":["evil.test { }"]}' "$API/sites")
+echo "BAD=$BAD"
+echo "$BAD" | grep -q '"ok":false' || { echo INJECT_NOT_REJECTED; exit 1; }
 # 手改漂移
 echo '# drift' >> /etc/nginx/sites-available/demo.conf
 ID=$(printf '%s' "$CREATE" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')

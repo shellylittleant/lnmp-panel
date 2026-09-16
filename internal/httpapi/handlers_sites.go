@@ -165,7 +165,7 @@ func (s *Server) handleSitePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st, err := s.Sites.Update(r.Context(), id, in)
-	if errors.Is(err, site.ErrDrift) {
+	if errors.Is(err, site.ErrDrift) || errors.Is(err, site.ErrRawMode) {
 		writeErr(w, 409, "conflict", err.Error())
 		return
 	}
@@ -180,6 +180,10 @@ func (s *Server) handleSiteDelete(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	purge := r.URL.Query().Get("purge_files") == "true"
 	if err := s.Sites.Delete(r.Context(), id, purge); err != nil {
+		if errors.Is(err, site.ErrPurge) {
+			writeErr(w, 400, "invalid", err.Error())
+			return
+		}
 		writeErr(w, 400, "invalid", err.Error())
 		return
 	}
@@ -269,6 +273,10 @@ func (s *Server) handleRedirects(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Sites.PutRedirects(r.Context(), id, in.Items); err != nil {
+		if errors.Is(err, site.ErrRawMode) {
+			writeErr(w, 409, "conflict", err.Error())
+			return
+		}
 		writeErr(w, 400, "invalid", err.Error())
 		return
 	}

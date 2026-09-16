@@ -100,7 +100,11 @@ func (a ACMEIssuer) Issue(ctx context.Context, domains []string, putHTTP01 func(
 		return nil, nil, "", time.Time{}, err
 	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: kb})
-	return certPEM, keyPEM, "letsencrypt", time.Now().Add(90 * 24 * time.Hour), nil
+	na := time.Now().Add(90 * 24 * time.Hour)
+	if t, err := leafNotAfter(certPEM); err == nil {
+		na = t
+	}
+	return certPEM, keyPEM, "letsencrypt", na, nil
 }
 
 func (a ACMEIssuer) accountKey() (*ecdsa.PrivateKey, error) {

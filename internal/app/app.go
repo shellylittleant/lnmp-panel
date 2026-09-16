@@ -122,7 +122,6 @@ func Run(cfgPath string, skipOS bool) error {
 	}
 	ngx := nginx.New()
 	sites := site.New(db, tpl, ngx)
-	sites.SkipNX = !ngx.Installed()
 	sslSvc := ssl.New(db, sites)
 	if skipOS {
 		sslSvc.Issuer = ssl.SelfSigner{}

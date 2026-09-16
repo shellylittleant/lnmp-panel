@@ -113,24 +113,24 @@ async function del() {
     <n-alert v-if="drifted" type="warning" title="配置漂移">
       磁盘上的配置与面板上次写入不一致，已显示磁盘内容。保存将以你现在提交的内容覆盖磁盘。
     </n-alert>
-    <n-alert v-if="rawMode" type="info" title="原文模式">当前为原文模式，表单保存会按模板重写。可点「恢复为模板渲染」。</n-alert>
+    <n-alert v-if="rawMode" type="info" title="原文模式">当前为原文模式，表单只读。请先点「恢复为模板渲染」再改表单。</n-alert>
     <n-card title="站点">
       <n-form>
-        <n-form-item label="名称"><n-input v-model:value="name" /></n-form-item>
-        <n-form-item label="域名"><n-input v-model:value="domains" /></n-form-item>
-        <n-form-item label="根目录"><n-input v-model:value="root" /></n-form-item>
-        <n-form-item label="PHP 版本"><n-input v-model:value="php" placeholder="空则静态，如 8.3" /></n-form-item>
-        <n-form-item label="反代目标"><n-input v-model:value="proxy" /></n-form-item>
-        <n-form-item label="HTTP/2"><n-checkbox v-model:checked="http2" /></n-form-item>
+        <n-form-item label="名称"><n-input v-model:value="name" :disabled="rawMode" /></n-form-item>
+        <n-form-item label="域名"><n-input v-model:value="domains" :disabled="rawMode" /></n-form-item>
+        <n-form-item label="根目录"><n-input v-model:value="root" :disabled="rawMode" /></n-form-item>
+        <n-form-item label="PHP 版本"><n-input v-model:value="php" placeholder="空则静态，如 8.3" :disabled="rawMode" /></n-form-item>
+        <n-form-item label="反代目标"><n-input v-model:value="proxy" :disabled="rawMode" /></n-form-item>
+        <n-form-item label="HTTP/2"><n-checkbox v-model:checked="http2" :disabled="rawMode" /></n-form-item>
         <n-form-item label="站点模板">
-          <n-select v-model:value="nginxTpl" :options="tpls.filter((x) => x.label.includes('nginx_site'))" clearable />
+          <n-select v-model:value="nginxTpl" :options="tpls.filter((x) => x.label.includes('nginx_site'))" clearable :disabled="rawMode" />
         </n-form-item>
         <n-form-item label="伪静态">
-          <n-select v-model:value="rewriteTpl" :options="tpls.filter((x) => x.label.includes('nginx_rewrite'))" clearable />
+          <n-select v-model:value="rewriteTpl" :options="tpls.filter((x) => x.label.includes('nginx_rewrite'))" clearable :disabled="rawMode" />
         </n-form-item>
         <n-checkbox v-model:checked="force">确认覆盖磁盘（漂移时必勾）</n-checkbox>
         <n-space style="margin-top: 12px">
-          <n-button type="primary" @click="save">保存表单</n-button>
+          <n-button type="primary" :disabled="rawMode" @click="save">保存表单</n-button>
           <n-button @click="issue">申请/签发证书</n-button>
           <n-button @click="useTpl">恢复为模板渲染</n-button>
           <n-button type="error" @click="del">删除站点</n-button>

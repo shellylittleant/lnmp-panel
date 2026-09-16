@@ -48,9 +48,16 @@ func (n *NginxInstaller) run(ctx context.Context, id string) {
 			n.Jobs.Finish(id, err)
 			return
 		}
-		_ = n.Nginx.TestAndReload(ctx)
+		if err := n.Nginx.TestAndReload(ctx); err != nil {
+			n.Jobs.Finish(id, err)
+			return
+		}
 	}
-	_ = os.MkdirAll("/var/www", 0755)
+	if err := os.MkdirAll("/var/www", 0755); err != nil {
+		n.Jobs.Finish(id, err)
+		return
+	}
+	_ = os.Chmod("/var/www", 0755)
 	n.Jobs.Finish(id, nil)
 }
 

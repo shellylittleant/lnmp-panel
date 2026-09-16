@@ -12,9 +12,12 @@ import (
 	"lnmp-panel/internal/template"
 )
 
-const GlobalConf = `log_format lnmp_panel '$remote_addr - $remote_user [$time_local] "$request" '
+const (
+	AcmeDir    = "/var/www/.acme-challenge"
+	GlobalConf = `log_format lnmp_panel '$remote_addr - $remote_user [$time_local] "$request" '
                      '$status $body_bytes_sent "$http_referer" "$http_user_agent" $request_time $host';
 `
+)
 
 type Service struct {
 	Bin        string
@@ -32,7 +35,7 @@ func New() *Service {
 		Available:  "/etc/nginx/sites-available",
 		Enabled:    "/etc/nginx/sites-enabled",
 		ConfD:      "/etc/nginx/conf.d",
-		AcmeWWW:    "/var/lib/lnmp-panel/acme-www",
+		AcmeWWW:    AcmeDir,
 		BackupRoot: "/var/lib/lnmp-panel/backups/nginx",
 		Runner:     exec.Run,
 	}
@@ -43,7 +46,15 @@ func (s *Service) Installed() bool {
 	return err == nil
 }
 
+func SystemdLive() bool {
+	st, err := os.Stat("/run/systemd/system")
+	return err == nil && st.IsDir()
+}
+
 func (s *Service) Version(ctx context.Context) string {
+	if s.Runner == nil || !s.Installed() {
+		return ""
+	}
 	r, err := s.Runner(ctx, 5*time.Second, s.Bin, "-v")
 	if err != nil {
 		return ""
@@ -60,6 +71,7 @@ func (s *Service) EnsureLayout() error {
 		if err := os.MkdirAll(d, 0755); err != nil {
 			return err
 		}
+		_ = os.Chmod(d, 0755)
 	}
 	return panelFS.WriteAtomic(filepath.Join(s.ConfD, "lnmp-panel.conf"), []byte(GlobalConf), 0644)
 }
@@ -75,10 +87,7 @@ func (s *Service) EnabledPath(siteKey string) string {
 func (s *Service) WriteSite(siteKey, content string) error {
 	path := s.ConfPath(siteKey)
 	_, _ = panelFS.Backup(path, s.BackupRoot)
-	if err := panelFS.WriteAtomic(path, []byte(content), 0644); err != nil {
-		return err
-	}
-	return nil
+	return panelFS.WriteAtomic(path, []byte(content), 0644)
 }
 
 func (s *Service) Restore(siteKey, backupFile string) error {
@@ -94,7 +103,8 @@ func (s *Service) Restore(siteKey, backupFile string) error {
 
 func (s *Service) RemoveSite(siteKey string) error {
 	_ = os.Remove(s.EnabledPath(siteKey))
-	return os.Remove(s.ConfPath(siteKey))
+	_ = os.Remove(s.ConfPath(siteKey))
+	return nil
 }
 
 func (s *Service) Enable(siteKey string) error {
@@ -108,27 +118,47 @@ func (s *Service) Disable(siteKey string) error {
 	return os.Remove(s.EnabledPath(siteKey))
 }
 
-func (s *Service) TestAndReload(ctx context.Context) error {
-	if s.Runner == nil {
-		return nil
+func clip(s string) string {
+	if len(s) > 2000 {
+		return s[:2000]
 	}
-	r, err := s.Runner(ctx, 10*time.Second, s.Bin, "-t")
+	return s
+}
+
+func (s *Service) TestAndReload(ctx context.Context) error {
+	if !s.Installed() {
+		return fmt.Errorf("未安装 nginx")
+	}
+	run := s.Runner
+	if run == nil {
+		run = exec.Run
+	}
+	r, err := run(ctx, 10*time.Second, s.Bin, "-t")
 	if err != nil {
 		msg := r.Stderr
 		if msg == "" {
 			msg = r.Stdout
 		}
-		if len(msg) > 2000 {
-			msg = msg[:2000]
-		}
-		return fmt.Errorf("nginx -t 失败：%s", msg)
+		return fmt.Errorf("nginx -t 失败：%s", clip(msg))
 	}
-	_, err = s.Runner(ctx, 10*time.Second, s.Bin, "-s", "reload")
-	if err != nil {
-		if _, err2 := s.Runner(ctx, 10*time.Second, "/usr/bin/systemctl", "reload", "nginx"); err2 != nil {
-			_, err = s.Runner(ctx, 10*time.Second, s.Bin)
-			return err
+	if SystemdLive() {
+		r, err = run(ctx, 15*time.Second, "/usr/bin/systemctl", "reload", "nginx")
+		if err == nil {
+			return nil
 		}
+		r2, err2 := run(ctx, 15*time.Second, "/usr/bin/systemctl", "start", "nginx")
+		if err2 != nil {
+			return fmt.Errorf("systemctl reload/start nginx 失败：%s %s", clip(r.Stderr), clip(r2.Stderr))
+		}
+		return nil
+	}
+	r, err = run(ctx, 10*time.Second, s.Bin, "-s", "reload")
+	if err == nil {
+		return nil
+	}
+	r2, err2 := run(ctx, 10*time.Second, s.Bin)
+	if err2 != nil {
+		return fmt.Errorf("nginx reload/start 失败：%s %s", clip(r.Stderr), clip(r2.Stderr))
 	}
 	return nil
 }

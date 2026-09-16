@@ -25,18 +25,21 @@ var (
 	ErrDrift    = errors.New("磁盘配置与面板上次写入不一致，请确认后带 force=true 保存")
 	ErrDomain   = errors.New("域名已被其他站点使用")
 	ErrKey      = errors.New("site_key 须为小写字母数字和短横线")
+	ErrRawMode  = errors.New("站点处于原文模式，请先恢复为模板渲染")
+	ErrPurge    = errors.New("根目录不在 /var/www 下，请手动清理")
 )
 
 type Service struct {
-	db     *store.DB
-	tpl    *template.Service
-	ngx    *nginx.Service
-	WWW    string
-	SkipNX bool
+	db      *store.DB
+	tpl     *template.Service
+	ngx     *nginx.Service
+	WWW     string
+	CertDir string
+	SkipNX  bool // 仅测试显式打开，禁止从环境推断
 }
 
 func New(db *store.DB, tpl *template.Service, ngx *nginx.Service) *Service {
-	return &Service{db: db, tpl: tpl, ngx: ngx, WWW: "/var/www"}
+	return &Service{db: db, tpl: tpl, ngx: ngx, WWW: "/var/www", CertDir: "/var/lib/lnmp-panel/tls/sites"}
 }
 
 type Redirect struct {
@@ -211,57 +214,53 @@ func (s *Service) liveCert(id int64) (string, string) {
 }
 
 func (s *Service) Create(ctx context.Context, in In) (Site, error) {
-	if !keyRe.MatchString(in.SiteKey) {
-		return Site{}, ErrKey
-	}
-	if in.Name == "" {
-		in.Name = in.SiteKey
-	}
-	if len(in.Domains) == 0 {
-		return Site{}, fmt.Errorf("至少填写一个域名")
-	}
-	if in.Root == "" {
-		in.Root = filepath.Join(s.WWW, in.SiteKey)
-	}
-	if err := s.checkDomains(0, in.Domains); err != nil {
-		return Site{}, err
-	}
-	nid, rid, sid, err := s.defaultTpls(in)
+	st, err := s.prepare(in)
 	if err != nil {
 		return Site{}, err
 	}
-	h2, h3 := true, false
-	if in.HTTP2 != nil {
-		h2 = *in.HTTP2
+	if err := s.checkDomains(0, st.Domains); err != nil {
+		return Site{}, err
 	}
-	if in.HTTP3 != nil {
-		h3 = *in.HTTP3
+	content, err := s.render(st)
+	if err != nil {
+		return Site{}, err
 	}
-	pp, ba := "", ""
-	if in.ProxyPass != nil {
-		pp = *in.ProxyPass
+	if err := s.ensureRoot(st.Root); err != nil {
+		return Site{}, err
 	}
-	if in.BasicAuthFile != nil {
-		ba = *in.BasicAuthFile
+	if err := s.ngx.WriteSite(st.SiteKey, content); err != nil {
+		return Site{}, err
 	}
-	ab, _ := json.Marshal(nz(in.AccessAllow))
-	hb, _ := json.Marshal(nz(in.Hotlink))
+	if err := s.ngx.Enable(st.SiteKey); err != nil {
+		_ = s.ngx.RemoveSite(st.SiteKey)
+		return Site{}, err
+	}
+	if !s.SkipNX {
+		if err := s.ngx.TestAndReload(ctx); err != nil {
+			_ = s.ngx.RemoveSite(st.SiteKey)
+			return Site{}, err
+		}
+	}
+	h := template.Hash(content)
+	if disk, err := s.ngx.HashOf(st.SiteKey); err == nil {
+		h = disk
+	}
+	ab, _ := json.Marshal(st.AccessAllow)
+	hb, _ := json.Marshal(st.Hotlink)
 	now := s.db.Now()
 	res, err := s.db.SQL.Exec(`INSERT INTO sites(site_key, name, root, php_version, nginx_template_id, rewrite_template_id, ssl_template_id,
-		raw_mode, enabled, http2, http3, proxy_pass, access_allow, hotlink, basic_auth_file, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,0,1,?,?,?,?,?,?,?,?)`,
-		in.SiteKey, in.Name, in.Root, in.PHPVersion, nid, rid, sid, boolInt(h2), boolInt(h3), pp, string(ab), string(hb), ba, now, now)
+		raw_mode, last_written_hash, enabled, http2, http3, proxy_pass, access_allow, hotlink, basic_auth_file, created_at, updated_at)
+		VALUES (?,?,?,?,?,?,?,0,?,1,?,?,?,?,?,?,?,?)`,
+		st.SiteKey, st.Name, st.Root, st.PHPVersion, st.NginxTemplateID, st.RewriteTemplateID, st.SSLTemplateID, h,
+		boolInt(st.HTTP2), boolInt(st.HTTP3), st.ProxyPass, string(ab), string(hb), st.BasicAuthFile, now, now)
 	if err != nil {
+		_ = s.ngx.RemoveSite(st.SiteKey)
 		return Site{}, err
 	}
 	id, _ := res.LastInsertId()
-	if err := s.replaceDomains(id, in.Domains); err != nil {
-		return Site{}, err
-	}
-	if err := s.ensureRoot(in.Root); err != nil {
-		return Site{}, err
-	}
-	if err := s.apply(ctx, id, false); err != nil {
+	if err := s.replaceDomains(id, st.Domains); err != nil {
+		_, _ = s.db.SQL.Exec(`DELETE FROM sites WHERE id=?`, id)
+		_ = s.ngx.RemoveSite(st.SiteKey)
 		return Site{}, err
 	}
 	return s.Get(id)
@@ -272,10 +271,20 @@ func (s *Service) Update(ctx context.Context, id int64, in In) (Site, error) {
 	if err != nil {
 		return Site{}, err
 	}
+	if cur.RawMode {
+		return Site{}, ErrRawMode
+	}
 	if cur.Drifted && !in.Force {
 		return Site{}, ErrDrift
 	}
 	if len(in.Domains) > 0 {
+		for i, d := range in.Domains {
+			d = strings.ToLower(strings.TrimSpace(d))
+			if err := validDomain(d); err != nil {
+				return Site{}, err
+			}
+			in.Domains[i] = d
+		}
 		if err := s.checkDomains(id, in.Domains); err != nil {
 			return Site{}, err
 		}
@@ -323,8 +332,27 @@ func (s *Service) Update(ctx context.Context, id int64, in In) (Site, error) {
 	}
 	ab, _ := json.Marshal(nz(access))
 	hb, _ := json.Marshal(nz(hot))
+	if err := validRoot(root); err != nil {
+		return Site{}, err
+	}
+	if err := validToken("反代目标", pp); err != nil {
+		return Site{}, err
+	}
+	if err := validToken("basic auth 文件", ba); err != nil {
+		return Site{}, err
+	}
+	for _, x := range access {
+		if err := validToken("访问限制", x); err != nil {
+			return Site{}, err
+		}
+	}
+	for _, x := range hot {
+		if err := validToken("防盗链", x); err != nil {
+			return Site{}, err
+		}
+	}
 	_, err = s.db.SQL.Exec(`UPDATE sites SET name=?, root=?, php_version=?, nginx_template_id=?, rewrite_template_id=?, ssl_template_id=?,
-		http2=?, http3=?, proxy_pass=?, access_allow=?, hotlink=?, basic_auth_file=?, raw_mode=0, updated_at=? WHERE id=?`,
+		http2=?, http3=?, proxy_pass=?, access_allow=?, hotlink=?, basic_auth_file=?, updated_at=? WHERE id=?`,
 		name, root, php, nid, rid, sid, boolInt(h2), boolInt(h3), pp, string(ab), string(hb), ba, s.db.Now(), id)
 	if err != nil {
 		return Site{}, err
@@ -345,11 +373,27 @@ func (s *Service) Delete(ctx context.Context, id int64, purge bool) error {
 	if err != nil {
 		return err
 	}
-	_ = s.ngx.Disable(st.SiteKey)
-	_ = s.ngx.RemoveSite(st.SiteKey)
-	if _, err := s.db.SQL.Exec(`DELETE FROM sites WHERE id=?`, id); err != nil {
+	if purge && !s.underWWW(st.Root) {
+		return ErrPurge
+	}
+	tx, err := s.db.SQL.Begin()
+	if err != nil {
 		return err
 	}
+	if _, err := tx.Exec(`DELETE FROM certificates WHERE site_id=?`, id); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM sites WHERE id=?`, id); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	_ = s.ngx.Disable(st.SiteKey)
+	_ = s.ngx.RemoveSite(st.SiteKey)
+	_ = os.RemoveAll(filepath.Join(s.CertDir, fmt.Sprintf("%d", id)))
 	if purge {
 		_ = os.RemoveAll(st.Root)
 	}
@@ -418,8 +462,20 @@ func (s *Service) UseTemplate(ctx context.Context, id int64) error {
 }
 
 func (s *Service) PutRedirects(ctx context.Context, id int64, rs []Redirect) error {
-	if _, err := s.Get(id); err != nil {
+	st, err := s.Get(id)
+	if err != nil {
 		return err
+	}
+	if st.RawMode {
+		return ErrRawMode
+	}
+	for _, r := range rs {
+		if err := validToken("跳转路径", r.FromPath); err != nil {
+			return err
+		}
+		if err := validToken("跳转目标", r.ToURL); err != nil {
+			return err
+		}
 	}
 	_, _ = s.db.SQL.Exec(`DELETE FROM site_redirects WHERE site_id=?`, id)
 	for _, r := range rs {
@@ -433,25 +489,12 @@ func (s *Service) PutRedirects(ctx context.Context, id int64, rs []Redirect) err
 }
 
 func (s *Service) ApplyConf(ctx context.Context, id int64) error {
-	if err := s.apply(ctx, id, true); err != nil {
-		return err
-	}
-	if !s.SkipNX {
-		return s.ngx.TestAndReload(ctx)
-	}
-	return nil
+	return s.apply(ctx, id, true)
 }
 
-func (s *Service) apply(ctx context.Context, id int64, force bool) error {
-	st, err := s.Get(id)
-	if err != nil {
-		return err
-	}
-	if st.RawMode && !force {
-		return nil
-	}
+func (s *Service) render(st Site) (string, error) {
 	if st.NginxTemplateID == nil {
-		return fmt.Errorf("未选择 nginx 模板")
+		return "", fmt.Errorf("未选择 nginx 模板")
 	}
 	v := nginx.Vars{
 		SiteKey: st.SiteKey, Root: st.Root, Domains: st.Domains,
@@ -472,7 +515,18 @@ func (s *Service) apply(ctx context.Context, id int64, force bool) error {
 	if st.SSLTemplateID != nil {
 		sid = *st.SSLTemplateID
 	}
-	content, err := nginx.RenderSite(s.tpl, *st.NginxTemplateID, rid, sid, v)
+	return nginx.RenderSite(s.tpl, *st.NginxTemplateID, rid, sid, v)
+}
+
+func (s *Service) apply(ctx context.Context, id int64, force bool) error {
+	st, err := s.Get(id)
+	if err != nil {
+		return err
+	}
+	if st.RawMode && !force {
+		return nil
+	}
+	content, err := s.render(st)
 	if err != nil {
 		return err
 	}
@@ -495,13 +549,74 @@ func (s *Service) apply(ctx context.Context, id int64, force bool) error {
 	if disk, err := s.ngx.HashOf(st.SiteKey); err == nil {
 		h = disk
 	}
-	newID, err := s.tpl.EnsureUser("nginx_site", content, st.NginxTemplateID)
-	if err == nil && (st.NginxTemplateID == nil || newID != *st.NginxTemplateID) {
-		// 内容若与官方哈希不同会新建用户模板；站点仍绑定用户所选官方模板 ID，只更新 hash
-		_ = newID
-	}
 	_, err = s.db.SQL.Exec(`UPDATE sites SET last_written_hash=?, updated_at=? WHERE id=?`, h, s.db.Now(), id)
 	return err
+}
+
+func (s *Service) prepare(in In) (Site, error) {
+	if !keyRe.MatchString(in.SiteKey) {
+		return Site{}, ErrKey
+	}
+	if in.Name == "" {
+		in.Name = in.SiteKey
+	}
+	if len(in.Domains) == 0 {
+		return Site{}, fmt.Errorf("至少填写一个域名")
+	}
+	var domains []string
+	for _, d := range in.Domains {
+		d = strings.ToLower(strings.TrimSpace(d))
+		if err := validDomain(d); err != nil {
+			return Site{}, err
+		}
+		domains = append(domains, d)
+	}
+	if in.Root == "" {
+		in.Root = filepath.Join(s.WWW, in.SiteKey)
+	}
+	if err := validRoot(in.Root); err != nil {
+		return Site{}, err
+	}
+	h2, h3 := true, false
+	if in.HTTP2 != nil {
+		h2 = *in.HTTP2
+	}
+	if in.HTTP3 != nil {
+		h3 = *in.HTTP3
+	}
+	pp, ba := "", ""
+	if in.ProxyPass != nil {
+		pp = *in.ProxyPass
+	}
+	if in.BasicAuthFile != nil {
+		ba = *in.BasicAuthFile
+	}
+	if err := validToken("反代目标", pp); err != nil {
+		return Site{}, err
+	}
+	if err := validToken("basic auth 文件", ba); err != nil {
+		return Site{}, err
+	}
+	for _, x := range in.AccessAllow {
+		if err := validToken("访问限制", x); err != nil {
+			return Site{}, err
+		}
+	}
+	for _, x := range in.Hotlink {
+		if err := validToken("防盗链", x); err != nil {
+			return Site{}, err
+		}
+	}
+	nid, rid, sid, err := s.defaultTpls(in)
+	if err != nil {
+		return Site{}, err
+	}
+	return Site{
+		SiteKey: in.SiteKey, Name: in.Name, Domains: domains, Root: in.Root,
+		PHPVersion: in.PHPVersion, NginxTemplateID: nid, RewriteTemplateID: rid, SSLTemplateID: sid,
+		Enabled: true, HTTP2: h2, HTTP3: h3, ProxyPass: pp, AccessAllow: nz(in.AccessAllow),
+		Hotlink: nz(in.Hotlink), BasicAuthFile: ba,
+	}, nil
 }
 
 func (s *Service) defaultTpls(in In) (*int64, *int64, *int64, error) {
@@ -566,10 +681,16 @@ func (s *Service) ensureRoot(root string) error {
 	if err := os.MkdirAll(root, 0755); err != nil {
 		return err
 	}
+	if err := os.Chmod(root, 0755); err != nil {
+		return err
+	}
 	idx := filepath.Join(root, "index.html")
 	if _, err := os.Stat(idx); os.IsNotExist(err) {
-		_ = os.WriteFile(idx, []byte("<!doctype html><meta charset=utf-8><title>LNMP</title><p>站点已创建。</p>\n"), 0644)
+		if err := os.WriteFile(idx, []byte("<!doctype html><meta charset=utf-8><title>LNMP</title><p>站点已创建。</p>\n"), 0644); err != nil {
+			return err
+		}
 	}
+	_ = os.Chmod(idx, 0644)
 	if u, err := user.Lookup("www-data"); err == nil {
 		uid, _ := strconv.Atoi(u.Uid)
 		gid, _ := strconv.Atoi(u.Gid)

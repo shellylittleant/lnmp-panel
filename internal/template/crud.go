@@ -151,5 +151,17 @@ func (s *Service) Export(id int64) ([]byte, error) {
 }
 
 func (s *Service) Import(typ, name, content string) (int64, error) {
-	return s.EnsureUser(typ, content, nil)
+	h := Hash(content)
+	var id int64
+	err := s.db.SQL.QueryRow(`SELECT id FROM templates WHERE origin='user' AND type=? AND content_hash=?`, typ, h).Scan(&id)
+	if err == nil {
+		return id, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return 0, err
+	}
+	if name == "" {
+		name = "用户-" + time.Now().UTC().Format("20060102-150405")
+	}
+	return s.CreateUser(typ, name, content, nil)
 }
