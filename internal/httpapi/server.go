@@ -11,7 +11,9 @@ import (
 	"lnmp-panel/internal/auth"
 	"lnmp-panel/internal/env"
 	"lnmp-panel/internal/jobs"
+	"lnmp-panel/internal/mysql"
 	"lnmp-panel/internal/nginx"
+	"lnmp-panel/internal/php"
 	"lnmp-panel/internal/settings"
 	"lnmp-panel/internal/site"
 	"lnmp-panel/internal/ssl"
@@ -36,6 +38,9 @@ type Server struct {
 	Nginx     *nginx.Service
 	SSL       *ssl.Service
 	Installer *env.NginxInstaller
+	Stack     *env.StackInstaller
+	PHP       *php.Service
+	MySQL     *mysql.Service
 }
 
 func (s *Server) Handler() http.Handler {
@@ -58,6 +63,34 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("GET /api/v1/jobs/{id}", s.requireAuth(s.handleJob))
 	api.HandleFunc("GET /api/v1/env", s.requireAuth(s.handleEnv))
 	api.HandleFunc("POST /api/v1/env/nginx/install", s.requireAuth(s.handleNginxInstall))
+	api.HandleFunc("POST /api/v1/env/install", s.requireAuth(s.handleEnvInstall))
+	api.HandleFunc("GET /api/v1/php/versions", s.requireAuth(s.handlePHPVersions))
+	api.HandleFunc("POST /api/v1/php/versions/{ver}/install", s.requireAuth(s.handlePHPInstall))
+	api.HandleFunc("GET /api/v1/php/versions/{ver}/extensions", s.requireAuth(s.handlePHPExtGet))
+	api.HandleFunc("POST /api/v1/php/versions/{ver}/extensions", s.requireAuth(s.handlePHPExtAdd))
+	api.HandleFunc("DELETE /api/v1/php/versions/{ver}/extensions/{name}", s.requireAuth(s.handlePHPExtDel))
+	api.HandleFunc("GET /api/v1/php/versions/{ver}/ini", s.requireAuth(s.handlePHPIniGet))
+	api.HandleFunc("PUT /api/v1/php/versions/{ver}/ini", s.requireAuth(s.handlePHPIniPut))
+	api.HandleFunc("PUT /api/v1/php/versions/{ver}/ini/raw", s.requireAuth(s.handlePHPIniRaw))
+	api.HandleFunc("POST /api/v1/php/versions/{ver}/ini/use-template", s.requireAuth(s.handlePHPIniUseTpl))
+	api.HandleFunc("GET /api/v1/php/versions/{ver}/pool", s.requireAuth(s.handlePHPPoolGet))
+	api.HandleFunc("PUT /api/v1/php/versions/{ver}/pool", s.requireAuth(s.handlePHPPoolPut))
+	api.HandleFunc("PUT /api/v1/php/versions/{ver}/pool/raw", s.requireAuth(s.handlePHPPoolRaw))
+	api.HandleFunc("POST /api/v1/php/versions/{ver}/pool/use-template", s.requireAuth(s.handlePHPPoolUseTpl))
+	api.HandleFunc("GET /api/v1/mysql/databases", s.requireAuth(s.handleMySQLDBs))
+	api.HandleFunc("POST /api/v1/mysql/databases", s.requireAuth(s.handleMySQLDBCreate))
+	api.HandleFunc("DELETE /api/v1/mysql/databases/{name}", s.requireAuth(s.handleMySQLDBDrop))
+	api.HandleFunc("POST /api/v1/mysql/databases/{name}/export", s.requireAuth(s.handleMySQLExport))
+	api.HandleFunc("POST /api/v1/mysql/databases/{name}/import", s.requireAuth(s.handleMySQLImport))
+	api.HandleFunc("GET /api/v1/mysql/users", s.requireAuth(s.handleMySQLUsers))
+	api.HandleFunc("POST /api/v1/mysql/users", s.requireAuth(s.handleMySQLUserCreate))
+	api.HandleFunc("PUT /api/v1/mysql/users/{id}/password", s.requireAuth(s.handleMySQLUserPass))
+	api.HandleFunc("DELETE /api/v1/mysql/users/{id}", s.requireAuth(s.handleMySQLUserDel))
+	api.HandleFunc("GET /api/v1/mysql/cnf", s.requireAuth(s.handleMySQLCNFGet))
+	api.HandleFunc("PUT /api/v1/mysql/cnf", s.requireAuth(s.handleMySQLCNFPut))
+	api.HandleFunc("GET /api/v1/mysql/cnf/raw", s.requireAuth(s.handleMySQLCNFGet))
+	api.HandleFunc("PUT /api/v1/mysql/cnf/raw", s.requireAuth(s.handleMySQLCNFRaw))
+	api.HandleFunc("POST /api/v1/mysql/cnf/use-template", s.requireAuth(s.handleMySQLCNFUseTpl))
 	api.HandleFunc("GET /api/v1/templates", s.requireAuth(s.handleTemplates))
 	api.HandleFunc("POST /api/v1/templates", s.requireAuth(s.handleTemplateCreate))
 	api.HandleFunc("GET /api/v1/templates/{id}", s.requireAuth(s.handleTemplateGet))

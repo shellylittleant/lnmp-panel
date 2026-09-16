@@ -26,7 +26,7 @@ var (
 	ErrDomain   = errors.New("域名已被其他站点使用")
 	ErrKey      = errors.New("site_key 须为小写字母数字和短横线")
 	ErrRawMode  = errors.New("站点处于原文模式，请先恢复为模板渲染")
-	ErrPurge    = errors.New("根目录不在 /var/www 下，请手动清理")
+	ErrPurge    = errors.New("站点未删除：根目录不在 /var/www 下，请去掉 purge 选项或手动清理")
 )
 
 type Service struct {
@@ -605,6 +605,11 @@ func (s *Service) prepare(in In) (Site, error) {
 	for _, x := range in.Hotlink {
 		if err := validToken("防盗链", x); err != nil {
 			return Site{}, err
+		}
+	}
+	if in.PHPVersion != nil && *in.PHPVersion != "" {
+		if !phpVerRe.MatchString(*in.PHPVersion) {
+			return Site{}, fmt.Errorf("无效 PHP 版本（需要 8.2 及以上）")
 		}
 	}
 	nid, rid, sid, err := s.defaultTpls(in)

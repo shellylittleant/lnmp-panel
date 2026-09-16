@@ -35,6 +35,24 @@ func TestMigrateAndTemplateIndexes(t *testing.T) {
 	}
 }
 
+func TestStage3Tables(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(filepath.Join(dir, "panel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.SQL.Exec(`INSERT INTO php_versions(version, installed) VALUES ('8.3', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL.Exec(`INSERT INTO mysql_databases(name, charset, "collate", created_at) VALUES ('blog','utf8mb4','utf8mb4_0900_ai_ci','t')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL.Exec(`INSERT INTO mysql_users(user, host, created_at) VALUES ('u','localhost','t')`); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestJobsTable(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(filepath.Join(dir, "panel.db"))

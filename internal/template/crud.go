@@ -138,6 +138,10 @@ func (s *Service) Delete(id int64) error {
 	if n > 0 {
 		return fmt.Errorf("模板正被站点引用")
 	}
+	_ = s.db.SQL.QueryRow(`SELECT COUNT(1) FROM php_versions WHERE ini_template_id=? OR pool_template_id=?`, id, id).Scan(&n)
+	if n > 0 {
+		return fmt.Errorf("模板正被 PHP 版本引用")
+	}
 	_, err = s.db.SQL.Exec(`DELETE FROM templates WHERE id=?`, id)
 	return err
 }

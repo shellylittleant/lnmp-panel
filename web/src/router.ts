@@ -9,6 +9,8 @@ import Placeholder from "./views/Placeholder.vue";
 import Sites from "./views/Sites.vue";
 import SiteEdit from "./views/SiteEdit.vue";
 import Templates from "./views/Templates.vue";
+import PHP from "./views/PHP.vue";
+import MySQL from "./views/MySQL.vue";
 
 export const router = createRouter({
   history: createWebHistory(panelPrefix() + "/"),
@@ -24,8 +26,8 @@ export const router = createRouter({
         { path: "sites", component: Sites },
         { path: "sites/:id", component: SiteEdit },
         { path: "templates", component: Templates },
-        { path: "php", component: Placeholder, props: { title: "PHP" } },
-        { path: "mysql", component: Placeholder, props: { title: "数据库" } },
+        { path: "php", component: PHP },
+        { path: "mysql", component: MySQL },
         { path: "firewall", component: Placeholder, props: { title: "防火墙" } },
         { path: "logs", component: Placeholder, props: { title: "日志" } },
         { path: "cron", component: Placeholder, props: { title: "定时任务" } },

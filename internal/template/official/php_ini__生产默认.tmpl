@@ -1,0 +1,10 @@
+; lnmp-panel 托管的 php.ini 片段（conf.d/99-lnmp-panel.ini）
+upload_max_filesize = {{.UploadMaxFilesize}}
+post_max_size = {{.PostMaxSize}}
+memory_limit = {{.MemoryLimit}}
+max_execution_time = {{.MaxExecutionTime}}
+display_errors = {{.DisplayErrors}}
+opcache.enable = {{.OpcacheEnable}}
+opcache.memory_consumption = {{.OpcacheMemory}}
+opcache.max_accelerated_files = {{.OpcacheMaxFiles}}
+opcache.validate_timestamps = {{.OpcacheValidate}}

@@ -25,7 +25,9 @@ import (
 	"lnmp-panel/internal/auth"
 	"lnmp-panel/internal/env"
 	"lnmp-panel/internal/jobs"
+	"lnmp-panel/internal/mysql"
 	"lnmp-panel/internal/nginx"
+	"lnmp-panel/internal/php"
 	"lnmp-panel/internal/settings"
 	"lnmp-panel/internal/site"
 	"lnmp-panel/internal/ssl"
@@ -80,6 +82,27 @@ func startTest(t *testing.T) (base, prefix, password string, client *http.Client
 	sslSvc.AcmeWWW = ngx.AcmeWWW
 	sslSvc.Issuer = ssl.SelfSigner{}
 	jobSvc := jobs.New(db)
+	phpSvc := php.New(db, tpl, jobSvc)
+	phpSvc.SkipExec = true
+	phpSvc.BaseDir = filepath.Join(dir, "php")
+	phpSvc.RunDir = filepath.Join(dir, "runphp")
+	phpSvc.BinDir = filepath.Join(dir, "sbin")
+	phpSvc.BackupRoot = filepath.Join(dir, "bakphp")
+	phpSvc.PPACheck = func() bool { return true }
+	mysqlSvc := mysql.New(db, tpl, jobSvc)
+	mysqlSvc.SkipExec = true
+	mysqlSvc.CNFPath = filepath.Join(dir, "lnmp-panel.cnf")
+	mysqlSvc.Defaults = filepath.Join(dir, "mysql-root.cnf")
+	mysqlSvc.BackupRoot = filepath.Join(dir, "bakmysql")
+	mysqlSvc.TmpDir = filepath.Join(dir, "tmp")
+	stack := &env.StackInstaller{
+		Jobs: jobSvc, MySQL: mysqlSvc, SkipExec: true, Codename: "noble",
+		KeyPath: filepath.Join(dir, "keyrings", "mysql.asc"),
+		ListPath: filepath.Join(dir, "apt", "mysql-official.list"),
+		HTTPGet: func(url string) ([]byte, error) {
+			return []byte("-----BEGIN PGP PUBLIC KEY BLOCK-----\ntest\n-----END PGP PUBLIC KEY BLOCK-----\n"), nil
+		},
+	}
 	prefix = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	s := &Server{
 		Prefix:    prefix,
@@ -89,12 +112,15 @@ func startTest(t *testing.T) (base, prefix, password string, client *http.Client
 		Jobs:      jobSvc,
 		Started:   time.Now(),
 		Listen:    "127.0.0.1:0",
-		OS:        env.OSInfo{ID: "ubuntu", VersionID: "24.04", Pretty: "Ubuntu 24.04 LTS"},
+		OS:        env.OSInfo{ID: "ubuntu", VersionID: "24.04", Pretty: "Ubuntu 24.04 LTS", Codename: "noble"},
 		Tpl:       tpl,
 		Sites:     sites,
 		Nginx:     ngx,
 		SSL:       sslSvc,
 		Installer: &env.NginxInstaller{Jobs: jobSvc, Nginx: ngx},
+		Stack:     stack,
+		PHP:       phpSvc,
+		MySQL:     mysqlSvc,
 	}
 	https := &http.Server{Handler: s.Handler()}
 	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
@@ -431,6 +457,57 @@ func TestSiteCRUDAndSSL(t *testing.T) {
 	_ = json.Unmarshal(got.Data, &det)
 	if det["ssl_cert"] == "" || det["ssl_cert"] == nil {
 		t.Fatalf("应有证书路径：%s", got.Data)
+	}
+}
+
+func TestStage3PHPMySQLAPI(t *testing.T) {
+	base, prefix, pass, client, _ := startTest(t)
+	api := base + "/" + prefix + "/api/v1"
+	csrf := loginCSRF(t, client, api, "admin", pass)
+	code, e := doJSON(t, client, "GET", api+"/php/versions", csrf, nil)
+	if code != 200 || !e.OK {
+		t.Fatalf("php versions %d %+v", code, e)
+	}
+	code, e = doJSON(t, client, "POST", api+"/mysql/databases", csrf, map[string]string{"name": "blog"})
+	if code != 200 || !e.OK {
+		t.Fatalf("create db %d %+v", code, e)
+	}
+	code, e = doJSON(t, client, "POST", api+"/mysql/databases", csrf, map[string]string{"name": "a;drop"})
+	if code == 200 && e.OK {
+		t.Fatal("注入库名应拒绝")
+	}
+	code, e = doJSON(t, client, "POST", api+"/mysql/users", csrf, map[string]any{
+		"user": "blogu", "host": "localhost", "password": "GoodPass1", "databases": []string{"blog"},
+	})
+	if code != 200 || !e.OK {
+		t.Fatalf("create user %d %+v", code, e)
+	}
+	code, e = doJSON(t, client, "POST", api+"/env/install", csrf, map[string]any{})
+	if code != 200 || !e.OK {
+		t.Fatalf("env install %d %+v", code, e)
+	}
+	var job map[string]any
+	_ = json.Unmarshal(e.Data, &job)
+	jid, _ := job["job_id"].(string)
+	if jid == "" {
+		t.Fatal("缺 job_id")
+	}
+	ok := false
+	for i := 0; i < 50; i++ {
+		_, st := doJSON(t, client, "GET", api+"/jobs/"+jid, csrf, nil)
+		var js map[string]any
+		_ = json.Unmarshal(st.Data, &js)
+		if js["phase"] == "done" {
+			ok = true
+			break
+		}
+		if js["phase"] == "failed" {
+			t.Fatalf("job failed %+v", js)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !ok {
+		t.Fatal("env-install 任务未完成")
 	}
 }
 

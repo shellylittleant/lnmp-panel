@@ -5,6 +5,7 @@ import { api } from "../api";
 
 const st = ref<Record<string, unknown> | null>(null);
 const err = ref("");
+const svc = ref<Record<string, string>>({});
 
 onMounted(async () => {
   const r = await api<Record<string, unknown>>("GET", "/status");
@@ -13,6 +14,7 @@ onMounted(async () => {
     return;
   }
   st.value = r.data;
+  svc.value = (r.data.services as Record<string, string>) || {};
 });
 </script>
 
@@ -26,6 +28,9 @@ onMounted(async () => {
       <n-descriptions-item label="路径前缀">{{ st.path_prefix }}</n-descriptions-item>
       <n-descriptions-item label="进程 PID">{{ st.pid }}</n-descriptions-item>
       <n-descriptions-item label="运行秒数">{{ st.uptime_sec }}</n-descriptions-item>
+      <n-descriptions-item label="Nginx">{{ svc.nginx }}</n-descriptions-item>
+      <n-descriptions-item label="PHP">{{ svc.php }}</n-descriptions-item>
+      <n-descriptions-item label="MySQL">{{ svc.mysql }}</n-descriptions-item>
     </n-descriptions>
     <p v-else>加载中…</p>
   </n-card>

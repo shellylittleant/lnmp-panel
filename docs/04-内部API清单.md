@@ -150,7 +150,10 @@ type HAService interface {
 | GET | `/php/versions/:ver/ini` | 表单字段 + 原文 + drifted |
 | PUT | `/php/versions/:ver/ini` | 表单保存 |
 | PUT | `/php/versions/:ver/ini/raw` | 原文保存 |
+| POST | `/php/versions/:ver/ini/use-template` | 退出原文模式，按官方「生产默认」重写片段 |
 | GET/PUT | `/php/versions/:ver/pool` | 同 ini |
+| PUT | `/php/versions/:ver/pool/raw` | pool 原文 |
+| POST | `/php/versions/:ver/pool/use-template` | 退出原文模式 |
 | GET | `/mysql/databases` | |
 | POST | `/mysql/databases` | `{name, charset}` |
 | DELETE | `/mysql/databases/:name` | |
@@ -162,6 +165,7 @@ type HAService interface {
 | POST | `/mysql/databases/:name/import` | multipart SQL |
 | GET/PUT | `/mysql/cnf` | 面板托管片段表单 |
 | GET/PUT | `/mysql/cnf/raw` | 原文 |
+| POST | `/mysql/cnf/use-template` | 退出原文模式 |
 
 长时间 apt/导入：只走 `GET /jobs/:id`，禁止再开 `/env/jobs/:id` 之类第二入口。
 

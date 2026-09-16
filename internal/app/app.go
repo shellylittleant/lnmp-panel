@@ -19,7 +19,9 @@ import (
 	"lnmp-panel/internal/env"
 	"lnmp-panel/internal/httpapi"
 	"lnmp-panel/internal/jobs"
+	"lnmp-panel/internal/mysql"
 	"lnmp-panel/internal/nginx"
+	"lnmp-panel/internal/php"
 	"lnmp-panel/internal/scheduler"
 	"lnmp-panel/internal/settings"
 	"lnmp-panel/internal/site"
@@ -28,7 +30,7 @@ import (
 	"lnmp-panel/internal/template"
 )
 
-const Version = "0.1.0-stage1"
+const Version = "0.1.0-stage3"
 
 func CLI(args []string) error {
 	if len(args) == 0 {
@@ -131,6 +133,9 @@ func Run(cfgPath string, skipOS bool) error {
 		}
 	}
 	inst := &env.NginxInstaller{Jobs: jobSvc, Nginx: ngx}
+	phpSvc := php.New(db, tpl, jobSvc)
+	mysqlSvc := mysql.New(db, tpl, jobSvc)
+	stack := &env.StackInstaller{Jobs: jobSvc, MySQL: mysqlSvc, Codename: env.AptCodename(osInfo)}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	sch := scheduler.New(authSvc)
@@ -151,12 +156,15 @@ func Run(cfgPath string, skipOS bool) error {
 		Nginx:     ngx,
 		SSL:       sslSvc,
 		Installer: inst,
+		Stack:     stack,
+		PHP:       phpSvc,
+		MySQL:     mysqlSvc,
 	}
 	https := &http.Server{
 		Addr:         cfg.Listen,
 		Handler:      srv.Handler(),
 		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		WriteTimeout: 5 * time.Minute,
 		IdleTimeout:  60 * time.Second,
 		TLSConfig:    &tls.Config{MinVersion: tls.VersionTLS12},
 	}

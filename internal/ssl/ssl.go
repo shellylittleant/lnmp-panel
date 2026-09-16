@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"log"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -176,7 +177,7 @@ func (s *Service) RenewDue(ctx context.Context) error {
 	}
 	for _, id := range ids {
 		if err := s.Issue(ctx, id); err != nil {
-			fmt.Printf("站点 %d 续期失败：%v\n", id, err)
+			log.Printf("站点 %d 续期失败：%v", id, err)
 		}
 	}
 	return nil

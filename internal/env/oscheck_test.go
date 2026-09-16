@@ -31,13 +31,20 @@ func TestParseOSRelease(t *testing.T) {
 	in := `NAME="Ubuntu"
 ID=ubuntu
 VERSION_ID="24.04"
+VERSION_CODENAME=noble
 PRETTY_NAME="Ubuntu 24.04.1 LTS"
 `
 	info, err := ParseOSRelease(strings.NewReader(in))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.ID != "ubuntu" || info.VersionID != "24.04" {
+	if info.ID != "ubuntu" || info.VersionID != "24.04" || info.Codename != "noble" {
 		t.Fatalf("%+v", info)
+	}
+	if AptCodename(info) != "noble" {
+		t.Fatal(AptCodename(info))
+	}
+	if AptCodename(OSInfo{VersionID: "24.04"}) != "noble" {
+		t.Fatal("缺 codename 时应按 24.04 映射 noble")
 	}
 }

@@ -21,8 +21,15 @@ const http2 = ref(true);
 const tpls = ref<{ label: string; value: number }[]>([]);
 const nginxTpl = ref<number | null>(null);
 const rewriteTpl = ref<number | null>(null);
+const phpOpts = ref<{ label: string; value: string }[]>([{ label: "静态（无 PHP）", value: "" }]);
 
 onMounted(async () => {
+  const pv = await api<{ items: { version: string; installed: boolean }[] }>("GET", "/php/versions");
+  if (pv.ok) {
+    phpOpts.value = [{ label: "静态（无 PHP）", value: "" }].concat(
+      (pv.data.items || []).filter((x) => x.installed).map((x) => ({ label: x.version, value: x.version })),
+    );
+  }
   const t = await api<{ items: { id: number; type: string; name: string; origin: string }[] }>("GET", "/templates");
   if (t.ok) {
     tpls.value = (t.data.items || [])
@@ -65,7 +72,7 @@ async function save() {
     msg.error(r.error.message);
     return;
   }
-  msg.success("已保存");
+  msg.success("已保存，配置在 1 到 2 秒内生效");
   drifted.value = false;
 }
 
@@ -75,7 +82,7 @@ async function saveRaw() {
     msg.error(r.error.message);
     return;
   }
-  msg.success("原文已保存");
+  msg.success("原文已保存，配置在 1 到 2 秒内生效");
   rawMode.value = true;
 }
 
@@ -95,7 +102,7 @@ async function issue() {
     msg.error(r.error.message);
     return;
   }
-  msg.success("证书已签发并写回站点");
+  msg.success("证书已签发并写回站点，配置在 1 到 2 秒内生效");
 }
 
 async function del() {
@@ -119,7 +126,7 @@ async function del() {
         <n-form-item label="名称"><n-input v-model:value="name" :disabled="rawMode" /></n-form-item>
         <n-form-item label="域名"><n-input v-model:value="domains" :disabled="rawMode" /></n-form-item>
         <n-form-item label="根目录"><n-input v-model:value="root" :disabled="rawMode" /></n-form-item>
-        <n-form-item label="PHP 版本"><n-input v-model:value="php" placeholder="空则静态，如 8.3" :disabled="rawMode" /></n-form-item>
+        <n-form-item label="PHP 版本"><n-select v-model:value="php" :options="phpOpts" :disabled="rawMode" /></n-form-item>
         <n-form-item label="反代目标"><n-input v-model:value="proxy" :disabled="rawMode" /></n-form-item>
         <n-form-item label="HTTP/2"><n-checkbox v-model:checked="http2" :disabled="rawMode" /></n-form-item>
         <n-form-item label="站点模板">

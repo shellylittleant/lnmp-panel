@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"net/http"
@@ -237,7 +238,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"uptime_sec":  int(time.Since(s.Started).Seconds()),
 		"listen":      s.Listen,
 		"path_prefix": s.Prefix,
-		"services":    map[string]string{"nginx": nginxStatus(s), "php": "未检测", "mysql": "未检测"},
+		"services":    map[string]string{"nginx": nginxStatus(s), "php": phpStatus(s), "mysql": mysqlStatus(s)},
 	})
 }
 
@@ -281,4 +282,18 @@ func nginxStatus(s *Server) string {
 		return "未安装"
 	}
 	return "已安装"
+}
+
+func phpStatus(s *Server) string {
+	if s.PHP == nil {
+		return "未检测"
+	}
+	return s.PHP.StatusLine()
+}
+
+func mysqlStatus(s *Server) string {
+	if s.MySQL == nil {
+		return "未检测"
+	}
+	return s.MySQL.StatusLine(context.Background())
 }

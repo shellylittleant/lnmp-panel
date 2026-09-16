@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strconv"
 
+	"lnmp-panel/internal/mysql"
+	"lnmp-panel/internal/php"
 	"lnmp-panel/internal/site"
 )
 
@@ -16,11 +18,28 @@ func (s *Server) handleEnv(w http.ResponseWriter, r *http.Request) {
 		ngx = s.Nginx.Installed()
 		ver = s.Nginx.Version(r.Context())
 	}
+	phpLine, mysqlLine := "未安装", "未安装"
+	phpPPA, mysqlOn := false, false
+	if s.PHP != nil {
+		phpLine = s.PHP.StatusLine()
+		if s.PHP.PPACheck != nil {
+			phpPPA = s.PHP.PPACheck()
+		} else {
+			phpPPA = php.PPAPresent()
+		}
+	}
+	if s.MySQL != nil {
+		mysqlLine = s.MySQL.StatusLine(r.Context())
+		mysqlOn = s.MySQL.Installed()
+	}
 	writeOK(w, map[string]any{
-		"nginx_installed": ngx,
-		"nginx_version":   ver,
-		"php":             "未安装（阶段 3）",
-		"mysql":           "未安装（阶段 3）",
+		"nginx_installed":       ngx,
+		"nginx_version":         ver,
+		"php":                   phpLine,
+		"php_ppa":               phpPPA,
+		"mysql":                 mysqlLine,
+		"mysql_official_source": mysql.OfficialPresent(),
+		"mysql_installed":       mysqlOn,
 	})
 }
 

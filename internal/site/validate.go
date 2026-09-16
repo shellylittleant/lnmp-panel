@@ -9,6 +9,7 @@ import (
 )
 
 var domainRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$`)
+var phpVerRe = regexp.MustCompile(`^8\.([2-9]|[1-9][0-9]+)$`)
 
 func validDomain(d string) error {
 	d = strings.ToLower(strings.TrimSpace(d))

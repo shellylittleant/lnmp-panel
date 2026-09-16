@@ -13,6 +13,7 @@ type OSInfo struct {
 	ID        string
 	VersionID string
 	Pretty    string
+	Codename  string
 }
 
 func ReadOSRelease(path string) (OSInfo, error) {
@@ -44,6 +45,8 @@ func ParseOSRelease(r io.Reader) (OSInfo, error) {
 			info.VersionID = v
 		case "PRETTY_NAME":
 			info.Pretty = v
+		case "VERSION_CODENAME":
+			info.Codename = v
 		}
 	}
 	if err := sc.Err(); err != nil {
@@ -81,4 +84,19 @@ func MustCurrentOS() (OSInfo, error) {
 		return OSInfo{}, err
 	}
 	return info, CheckSupported(info)
+}
+
+// AptCodename 给 apt 源用。优先 os-release 的 VERSION_CODENAME。
+func AptCodename(info OSInfo) string {
+	if info.Codename != "" {
+		return info.Codename
+	}
+	switch info.VersionID {
+	case "24.04":
+		return "noble"
+	case "26.04":
+		return "resolute"
+	default:
+		return ""
+	}
 }
