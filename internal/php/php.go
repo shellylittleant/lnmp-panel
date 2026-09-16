@@ -185,7 +185,6 @@ func (s *Service) List(ctx context.Context) ([]Version, error) {
 	}
 	rows, err := s.db.SQL.Query(`SELECT version FROM php_versions`)
 	if err == nil {
-		defer rows.Close()
 		for rows.Next() {
 			var v string
 			if err := rows.Scan(&v); err == nil && ValidVersion(v) == nil && !seen[v] {
@@ -193,6 +192,7 @@ func (s *Service) List(ctx context.Context) ([]Version, error) {
 				vers = append(vers, v)
 			}
 		}
+		_ = rows.Close()
 	}
 	sortVersions(vers)
 	out := make([]Version, 0, len(vers))

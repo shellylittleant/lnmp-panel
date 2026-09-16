@@ -166,14 +166,19 @@ func (s *Service) RenewDue(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
 	var ids []int64
 	for rows.Next() {
 		var id int64
 		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
 			return err
 		}
 		ids = append(ids, id)
+	}
+	err = rows.Err()
+	_ = rows.Close()
+	if err != nil {
+		return err
 	}
 	for _, id := range ids {
 		if err := s.Issue(ctx, id); err != nil {

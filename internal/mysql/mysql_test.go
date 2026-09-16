@@ -171,6 +171,54 @@ func TestCreateDropDBAndUser(t *testing.T) {
 	}
 }
 
+func TestListUsersNoNestedQueryDeadlock(t *testing.T) {
+	dir := t.TempDir()
+	db, err := store.OpenConns(filepath.Join(dir, "p.db"), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	tpl := template.New(db)
+	if err := tpl.SyncOfficial(); err != nil {
+		t.Fatal(err)
+	}
+	s := New(db, tpl, jobs.New(db))
+	s.SkipExec = true
+	s.CNFPath = filepath.Join(dir, "lnmp-panel.cnf")
+	s.Defaults = filepath.Join(dir, "root.cnf")
+	s.BackupRoot = filepath.Join(dir, "bak")
+	s.TmpDir = filepath.Join(dir, "tmp")
+	ctx := context.Background()
+	if _, err := s.CreateDB(ctx, "blog", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateUser(ctx, "u1", "localhost", "GoodPass1", []string{"blog"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateUser(ctx, "u2", "localhost", "GoodPass1", []string{"blog"}); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		items, err := s.ListUsers()
+		if err == nil && len(items) != 2 {
+			err = fmt.Errorf("want 2 got %d", len(items))
+		}
+		if err == nil && (len(items[0].Databases) != 1 || len(items[1].Databases) != 1) {
+			err = fmt.Errorf("grants %+v", items)
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ListUsers 在单连接下超过 2 秒，疑似嵌套查询死锁")
+	}
+}
+
 func TestCNFFormVsRaw(t *testing.T) {
 	s := setupMySQL(t)
 	ctx := context.Background()

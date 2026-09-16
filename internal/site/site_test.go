@@ -211,6 +211,91 @@ func TestFormSaveDoesNotCreateTemplate(t *testing.T) {
 	}
 }
 
+func TestListNoNestedQueryDeadlock(t *testing.T) {
+	dir := t.TempDir()
+	db, err := store.OpenConns(filepath.Join(dir, "p.db"), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	tpl := template.New(db)
+	if err := tpl.SyncOfficial(); err != nil {
+		t.Fatal(err)
+	}
+	ngx := nginx.New()
+	ngx.Available = filepath.Join(dir, "a")
+	ngx.Enabled = filepath.Join(dir, "e")
+	ngx.ConfD = filepath.Join(dir, "c")
+	ngx.AcmeWWW = filepath.Join(dir, "acme")
+	ngx.BackupRoot = filepath.Join(dir, "b")
+	if err := ngx.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	s := New(db, tpl, ngx)
+	s.WWW = filepath.Join(dir, "www")
+	s.SkipNX = true
+	if _, err := s.Create(context.Background(), In{SiteKey: "a", Domains: []string{"a.test"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Create(context.Background(), In{SiteKey: "b", Domains: []string{"b.test"}}); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		items, err := s.List()
+		if err == nil && len(items) != 2 {
+			err = errors.New("want 2")
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("List 在单连接下超过 2 秒，疑似嵌套查询死锁")
+	}
+}
+
+func TestUseTemplateAfterRawRestoresOfficial(t *testing.T) {
+	s := setup(t)
+	st, err := s.Create(context.Background(), In{SiteKey: "rawback", Domains: []string{"rawback.example.test"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	origID := st.NginxTemplateID
+	marker := "RAW_MARKER_LNMP_PANEL"
+	raw := "server { listen 80; server_name rawback.example.test; # " + marker + "\n}\n"
+	if err := s.PutRaw(context.Background(), st.ID, raw, false); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.Get(st.ID)
+	if !got.RawMode {
+		t.Fatal("应为原文模式")
+	}
+	if origID != nil && got.NginxTemplateID != nil && *got.NginxTemplateID != *origID {
+		t.Fatalf("PutRaw 不应改绑 nginx_template_id: %v -> %v", *origID, *got.NginxTemplateID)
+	}
+	if err := s.UseTemplate(context.Background(), st.ID); err != nil {
+		t.Fatal(err)
+	}
+	body, err := s.ngx.Read(st.SiteKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(body, marker) {
+		t.Fatalf("恢复模板后仍含原文标记：%s", body)
+	}
+	if !strings.Contains(body, "try_files") {
+		t.Fatalf("应含官方模板特征 try_files：%s", body)
+	}
+	got, _ = s.Get(st.ID)
+	if got.RawMode {
+		t.Fatal("应退出原文模式")
+	}
+}
+
 func TestEnsureRootIgnoresUmask(t *testing.T) {
 	old := syscall.Umask(0o077)
 	defer syscall.Umask(old)

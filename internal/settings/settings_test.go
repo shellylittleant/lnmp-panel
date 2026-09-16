@@ -18,21 +18,25 @@ func TestApplyRejectsSelfLock(t *testing.T) {
 	}
 	defer db.Close()
 	s := New(db)
-	err = s.Apply(Update{OpsIPCIDRs: []string{"10.0.0.0/8"}}, "127.0.0.1")
+	err = s.Apply(Update{OpsIPCIDRs: []string{"10.0.0.0/8"}}, "8.8.8.8")
 	if !errors.Is(err, ErrSelfLock) {
-		t.Fatalf("应拒绝自锁，得到 %v", err)
+		t.Fatalf("非回环自锁应拒绝，得到 %v", err)
 	}
-	raw, _ := s.Get("ops_ip_cidrs")
-	if raw != "" && raw != "[]" {
-		t.Fatalf("拒绝后不应写入白名单：%s", raw)
-	}
-	err = s.Apply(Update{OpsIPCIDRs: []string{"127.0.0.1", "10.0.0.0/8"}}, "127.0.0.1")
+	err = s.Apply(Update{OpsIPCIDRs: []string{"10.0.0.0/8"}}, "127.0.0.1")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("回环保存白名单应允许：%v", err)
 	}
 	ok, err := s.IPAllowed("127.0.0.1")
 	if err != nil || !ok {
-		t.Fatal("自己应仍可访问")
+		t.Fatal("回环应始终可访问")
+	}
+	ok, err = s.IPAllowed("::1")
+	if err != nil || !ok {
+		t.Fatal("::1 应始终可访问")
+	}
+	ok, err = s.IPAllowed("8.8.8.8")
+	if err != nil || ok {
+		t.Fatal("8.8.8.8 不在白名单内应拒绝")
 	}
 }
 

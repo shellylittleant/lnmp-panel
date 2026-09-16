@@ -11,6 +11,7 @@ lnmp-panel bootstrap --data-dir /var/lib/lnmp-panel --etc-dir /etc/lnmp-panel \
 echo BOOTSTRAP_OK
 umask 077
 lnmp-panel run --config /etc/lnmp-panel/panel.json >/tmp/panel.log 2>&1 &
+PANEL_PID=$!
 for i in $(seq 1 50); do
   curl -sk --max-time 1 "https://127.0.0.1:18443/${PFX}/" >/dev/null 2>&1 && break
   sleep 0.2
@@ -111,5 +112,53 @@ fi
 STATUS=$(curl -sk -c /tmp/cj -b /tmp/cj "$API/status")
 echo "$STATUS" | grep -q '"metrics"' || { echo STATUS_METRICS_FAIL; echo "$STATUS"; exit 1; }
 echo STATUS_OK
+
+wait_job() {
+  local jid="$1"
+  local st=""
+  for i in $(seq 1 90); do
+    st=$(curl -sk -c /tmp/cj -b /tmp/cj "$API/jobs/$jid")
+    echo "$st" | grep -q '"phase":"done"' && return 0
+    echo "$st" | grep -q '"phase":"failed"' && { echo "$st"; return 1; }
+    sleep 2
+  done
+  echo "TIMEOUT $st"; return 1
+}
+
+INST=$(curl -sk -c /tmp/cj -b /tmp/cj -X POST -H 'Content-Type: application/json' \
+  -H "X-CSRF-Token: $CSRF" -d '{}' "$API/env/nginx/install")
+echo "NGINX_INSTALL=$INST"
+wait_job "$(printf '%s' "$INST" | sed -n 's/.*"job_id":"\([^"]*\)".*/\1/p')" || { echo NGINX_JOB_FAIL; cat /tmp/panel.log; exit 1; }
+
+for key in a b; do
+  CR=$(curl -sk -c /tmp/cj -b /tmp/cj -X POST -H 'Content-Type: application/json' \
+    -H "X-CSRF-Token: $CSRF" \
+    -d "{\"site_key\":\"${key}\",\"name\":\"${key}\",\"domains\":[\"${key}.test\"]}" "$API/sites")
+  echo "CREATE_$key=$CR"
+  echo "$CR" | grep -q '"ok":true' || { echo CREATE_FAIL; echo "$CR"; cat /tmp/panel.log; exit 1; }
+done
+
+SITES=$(curl -sk --max-time 2 -c /tmp/cj -b /tmp/cj "$API/sites")
+echo "$SITES" | grep -q '"ok":true' || { echo SITES_LIST_FAIL; echo "$SITES"; exit 1; }
+echo SITES_OK
+
+kill "$PANEL_PID" 2>/dev/null || true
+wait "$PANEL_PID" 2>/dev/null || true
+lnmp-panel run --config /etc/lnmp-panel/panel.json >>/tmp/panel.log 2>&1 &
+PANEL_PID=$!
+ok=0
+for i in 1 2 3; do
+  code=$(curl -sk --max-time 1 -o /dev/null -w '%{http_code}' -c /tmp/cj2 -b /tmp/cj2 \
+    -H 'Content-Type: application/json' \
+    -d '{"username":"admin","password":"GoodPassw0rd!"}' "$API/auth/login" || true)
+  echo "RESTART_LOGIN_$i=$code"
+  if [[ "$code" == "200" ]]; then
+    ok=1
+    break
+  fi
+  sleep 1
+done
+test "$ok" = "1" || { echo RESTART_LOGIN_FAIL; cat /tmp/panel.log; exit 1; }
+echo RESTART_LOGIN_OK
 
 echo STAGE5_UBUNTU_OK

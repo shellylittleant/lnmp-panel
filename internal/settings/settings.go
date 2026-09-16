@@ -96,7 +96,7 @@ func (s *Service) Apply(u Update, callerIP string) error {
 				}
 			}
 		}
-		if len(u.OpsIPCIDRs) > 0 && !IPInCIDRs(callerIP, u.OpsIPCIDRs) {
+		if len(u.OpsIPCIDRs) > 0 && !IPInCIDRs(callerIP, u.OpsIPCIDRs) && !isLoopbackIP(callerIP) {
 			return ErrSelfLock
 		}
 		b, _ := json.Marshal(u.OpsIPCIDRs)
@@ -177,7 +177,15 @@ func IPInCIDRs(ip string, cidrs []string) bool {
 	return false
 }
 
+func isLoopbackIP(ip string) bool {
+	p := net.ParseIP(ip)
+	return p != nil && p.IsLoopback()
+}
+
 func (s *Service) IPAllowed(ip string) (bool, error) {
+	if isLoopbackIP(ip) {
+		return true, nil
+	}
 	raw, err := s.Get("ops_ip_cidrs")
 	if err != nil {
 		return false, err

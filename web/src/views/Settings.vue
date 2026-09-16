@@ -109,6 +109,7 @@ async function restart() {
         </n-form-item>
         <n-form-item label="运维 IP / CIDR（逗号分隔，主机角色可留空）">
           <n-input v-model:value="ops" type="textarea" />
+          <p class="hint">出口 IP 变化会被拒绝，可 SSH 执行 lnmp-panel whitelist clear 恢复。本机 127.0.0.1 / ::1 始终可访问。</p>
         </n-form-item>
         <n-button type="primary" @click="save">保存</n-button>
         <n-button style="margin-left: 8px" @click="restart">重启面板</n-button>
@@ -141,5 +142,11 @@ async function restart() {
   word-break: break-all;
   font-size: 12px;
   color: #666;
+}
+.hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: #666;
+  line-height: 1.5;
 }
 </style>

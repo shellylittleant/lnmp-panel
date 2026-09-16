@@ -395,15 +395,12 @@ func TestWhitelistRejectsSelfLock(t *testing.T) {
 	code, e := doJSON(t, client, "PUT", api+"/settings", csrf, map[string]any{
 		"ops_ip_cidrs": []string{"10.0.0.0/8"},
 	})
-	if code != 400 || e.OK {
-		t.Fatalf("自锁应 400，得到 %d %+v", code, e)
-	}
-	if e.Error == nil || e.Error.Message != "当前 IP 不在新白名单内，拒绝保存" {
-		t.Fatalf("错误文案不符：%+v", e.Error)
+	if code != 200 || !e.OK {
+		t.Fatalf("本机回环保存白名单应成功，得到 %d %+v", code, e)
 	}
 	code, sess := doJSON(t, client, "GET", api+"/auth/session", "", nil)
 	if code != 200 || !sess.OK {
-		t.Fatalf("拒绝后会话应仍可用，得到 %d", code)
+		t.Fatalf("回环应仍可访问，得到 %d", code)
 	}
 	code, ok := doJSON(t, client, "PUT", api+"/settings", csrf, map[string]any{
 		"ops_ip_cidrs": []string{"127.0.0.1"},

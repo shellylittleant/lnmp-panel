@@ -47,6 +47,8 @@ func CLI(args []string) error {
 		return runCmd(args[1:])
 	case "bootstrap":
 		return bootstrapCmd(args[1:])
+	case "whitelist":
+		return whitelistCmd(args[1:])
 	case "version":
 		fmt.Println(Version)
 		return nil
@@ -55,6 +57,7 @@ func CLI(args []string) error {
 			fmt.Print(`lnmp-panel 命令：
   bootstrap  初始化目录、证书、管理员与配置
   run        启动 HTTPS 面板
+  whitelist  show|set|clear  查看/设置/清空运维白名单
   version    打印版本
 `)
 			return nil
@@ -242,6 +245,8 @@ func Run(cfgPath string, skipOS bool) error {
 		Cron:      cronSvc,
 		Scheduler: sch,
 	}
+	baseCtx, baseCancel := context.WithCancel(context.Background())
+	defer baseCancel()
 	https := &http.Server{
 		Addr:         cfg.Listen,
 		Handler:      srv.Handler(),
@@ -249,6 +254,7 @@ func Run(cfgPath string, skipOS bool) error {
 		WriteTimeout: 5 * time.Minute,
 		IdleTimeout:  60 * time.Second,
 		TLSConfig:    &tls.Config{MinVersion: tls.VersionTLS12},
+		BaseContext:  func(net.Listener) context.Context { return baseCtx },
 	}
 	exitCh := make(chan struct{}, 1)
 	srv.Restart = func() {
@@ -269,16 +275,23 @@ func Run(cfgPath string, skipOS bool) error {
 	case err := <-errCh:
 		return err
 	case <-sig:
-		shctx, c := context.WithTimeout(context.Background(), 5*time.Second)
-		defer c()
-		return https.Shutdown(shctx)
+		shutdownHTTP(https, baseCancel)
+		return nil
 	case <-exitCh:
-		shctx, c := context.WithTimeout(context.Background(), 5*time.Second)
-		defer c()
-		_ = https.Shutdown(shctx)
+		shutdownHTTP(https, baseCancel)
 		os.Exit(0)
 		return nil
 	}
+}
+
+func shutdownHTTP(https *http.Server, cancel context.CancelFunc) {
+	if cancel != nil {
+		cancel()
+	}
+	ctx, c := context.WithTimeout(context.Background(), 5*time.Second)
+	defer c()
+	_ = https.Shutdown(ctx)
+	_ = https.Close()
 }
 
 type BootstrapResult struct {

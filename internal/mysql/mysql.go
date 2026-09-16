@@ -713,20 +713,27 @@ func (s *Service) ListUsers() ([]User, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	var out []User
 	for rows.Next() {
 		var u User
 		if err := rows.Scan(&u.ID, &u.User, &u.Host, &u.CreatedAt); err != nil {
+			_ = rows.Close()
 			return nil, err
 		}
-		u.Databases = s.userDBs(u.ID)
 		out = append(out, u)
+	}
+	err = rows.Err()
+	_ = rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].Databases = s.userDBs(out[i].ID)
 	}
 	if out == nil {
 		out = []User{}
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (s *Service) userDBs(id int64) []string {

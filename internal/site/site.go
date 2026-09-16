@@ -99,23 +99,29 @@ func (s *Service) List() ([]Site, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []Site
+	var ids []int64
 	for rows.Next() {
 		var id int64
 		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
 			return nil, err
 		}
+		ids = append(ids, id)
+	}
+	err = rows.Err()
+	_ = rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Site, 0, len(ids))
+	for _, id := range ids {
 		st, err := s.Get(id)
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, st)
 	}
-	if out == nil {
-		out = []Site{}
-	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (s *Service) Get(id int64) (Site, error) {
@@ -443,16 +449,37 @@ func (s *Service) PutRaw(ctx context.Context, id int64, body string, force bool)
 		}
 	}
 	h, _ := s.ngx.HashOf(st.SiteKey)
-	tid, _ := s.tpl.EnsureUser("nginx_site", body, st.NginxTemplateID)
-	_, err = s.db.SQL.Exec(`UPDATE sites SET raw_mode=1, nginx_template_id=?, last_written_hash=?, updated_at=? WHERE id=?`,
-		tid, h, s.db.Now(), id)
+	_, _ = s.tpl.EnsureUser("nginx_site", body, st.NginxTemplateID)
+	_, err = s.db.SQL.Exec(`UPDATE sites SET raw_mode=1, last_written_hash=?, updated_at=? WHERE id=?`,
+		h, s.db.Now(), id)
 	return err
 }
 
 func (s *Service) UseTemplate(ctx context.Context, id int64) error {
-	_, err := s.Get(id)
+	st, err := s.Get(id)
 	if err != nil {
 		return err
+	}
+	fallback := st.NginxTemplateID == nil
+	if st.NginxTemplateID != nil {
+		if _, err := s.tpl.Get(*st.NginxTemplateID); err != nil {
+			fallback = true
+		}
+	}
+	if fallback {
+		name := "静态站点"
+		if st.PHPVersion != nil && *st.PHPVersion != "" {
+			name = "PHP 站点"
+		}
+		rec, err := s.tpl.OfficialByName("nginx_site", name)
+		if err != nil {
+			return fmt.Errorf("缺少官方站点模板")
+		}
+		_, err = s.db.SQL.Exec(`UPDATE sites SET raw_mode=0, nginx_template_id=?, updated_at=? WHERE id=?`, rec.ID, s.db.Now(), id)
+		if err != nil {
+			return err
+		}
+		return s.apply(ctx, id, true)
 	}
 	_, err = s.db.SQL.Exec(`UPDATE sites SET raw_mode=0, updated_at=? WHERE id=?`, s.db.Now(), id)
 	if err != nil {

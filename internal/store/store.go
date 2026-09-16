@@ -29,7 +29,26 @@ func Open(path string) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	sqlDB.SetMaxOpenConns(1)
+	return finishOpen(sqlDB, path, 4)
+}
+
+// OpenConns 与 Open 相同，但可指定最大连接数（回归测试用 1 验证无嵌套查询死锁）。
+func OpenConns(path string, maxOpen int) (*DB, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return nil, err
+	}
+	sqlDB, err := sql.Open("sqlite", path)
+	if err != nil {
+		return nil, err
+	}
+	return finishOpen(sqlDB, path, maxOpen)
+}
+
+func finishOpen(sqlDB *sql.DB, path string, maxOpen int) (*DB, error) {
+	if maxOpen < 1 {
+		maxOpen = 1
+	}
+	sqlDB.SetMaxOpenConns(maxOpen)
 	if err := sqlDB.Ping(); err != nil {
 		_ = sqlDB.Close()
 		return nil, err
