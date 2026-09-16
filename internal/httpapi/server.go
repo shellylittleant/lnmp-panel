@@ -11,22 +11,31 @@ import (
 	"lnmp-panel/internal/auth"
 	"lnmp-panel/internal/env"
 	"lnmp-panel/internal/jobs"
+	"lnmp-panel/internal/nginx"
 	"lnmp-panel/internal/settings"
+	"lnmp-panel/internal/site"
+	"lnmp-panel/internal/ssl"
+	"lnmp-panel/internal/template"
 	"lnmp-panel/internal/webui"
 )
 
 const cookieName = "lnmp_panel_session"
 
 type Server struct {
-	Prefix   string
-	Auth     *auth.Service
-	Audit    *audit.Service
-	Settings *settings.Service
-	Jobs     *jobs.Service
-	Started  time.Time
-	Listen   string
-	Restart  func()
-	OS       env.OSInfo
+	Prefix    string
+	Auth      *auth.Service
+	Audit     *audit.Service
+	Settings  *settings.Service
+	Jobs      *jobs.Service
+	Started   time.Time
+	Listen    string
+	Restart   func()
+	OS        env.OSInfo
+	Tpl       *template.Service
+	Sites     *site.Service
+	Nginx     *nginx.Service
+	SSL       *ssl.Service
+	Installer *env.NginxInstaller
 }
 
 func (s *Server) Handler() http.Handler {
@@ -47,6 +56,30 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("GET /api/v1/audit", s.requireAuth(s.handleAudit))
 	api.HandleFunc("POST /api/v1/panel/restart", s.requireAuth(s.handleRestart))
 	api.HandleFunc("GET /api/v1/jobs/{id}", s.requireAuth(s.handleJob))
+	api.HandleFunc("GET /api/v1/env", s.requireAuth(s.handleEnv))
+	api.HandleFunc("POST /api/v1/env/nginx/install", s.requireAuth(s.handleNginxInstall))
+	api.HandleFunc("GET /api/v1/templates", s.requireAuth(s.handleTemplates))
+	api.HandleFunc("POST /api/v1/templates", s.requireAuth(s.handleTemplateCreate))
+	api.HandleFunc("GET /api/v1/templates/{id}", s.requireAuth(s.handleTemplateGet))
+	api.HandleFunc("PUT /api/v1/templates/{id}", s.requireAuth(s.handleTemplatePut))
+	api.HandleFunc("DELETE /api/v1/templates/{id}", s.requireAuth(s.handleTemplateDelete))
+	api.HandleFunc("POST /api/v1/templates/{id}/export", s.requireAuth(s.handleTemplateExport))
+	api.HandleFunc("POST /api/v1/templates/import", s.requireAuth(s.handleTemplateImport))
+	api.HandleFunc("GET /api/v1/sites", s.requireAuth(s.handleSites))
+	api.HandleFunc("POST /api/v1/sites", s.requireAuth(s.handleSiteCreate))
+	api.HandleFunc("GET /api/v1/sites/{id}", s.requireAuth(s.handleSiteGet))
+	api.HandleFunc("PUT /api/v1/sites/{id}", s.requireAuth(s.handleSitePut))
+	api.HandleFunc("DELETE /api/v1/sites/{id}", s.requireAuth(s.handleSiteDelete))
+	api.HandleFunc("POST /api/v1/sites/{id}/enable", s.requireAuth(s.handleSiteEnable))
+	api.HandleFunc("POST /api/v1/sites/{id}/disable", s.requireAuth(s.handleSiteDisable))
+	api.HandleFunc("GET /api/v1/sites/{id}/nginx", s.requireAuth(s.handleSiteNginxGet))
+	api.HandleFunc("PUT /api/v1/sites/{id}/nginx", s.requireAuth(s.handleSiteNginxPut))
+	api.HandleFunc("POST /api/v1/sites/{id}/nginx/use-template", s.requireAuth(s.handleSiteUseTpl))
+	api.HandleFunc("GET /api/v1/sites/{id}/redirects", s.requireAuth(s.handleRedirects))
+	api.HandleFunc("PUT /api/v1/sites/{id}/redirects", s.requireAuth(s.handleRedirects))
+	api.HandleFunc("POST /api/v1/sites/{id}/ssl/issue", s.requireAuth(s.handleSSLIssue))
+	api.HandleFunc("POST /api/v1/sites/{id}/ssl/renew", s.requireAuth(s.handleSSLIssue))
+	api.HandleFunc("GET /api/v1/certs", s.requireAuth(s.handleCerts))
 
 	inner := http.NewServeMux()
 	inner.Handle("/api/", s.withSecurity(s.auditWrites(api)))

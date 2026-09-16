@@ -11,6 +11,7 @@ const user = ref("");
 const menu: MenuOption[] = [
   { label: "概览", key: "/" },
   { label: "网站", key: "/sites" },
+  { label: "模板", key: "/templates" },
   { label: "PHP", key: "/php" },
   { label: "数据库", key: "/mysql" },
   { label: "防火墙", key: "/firewall" },

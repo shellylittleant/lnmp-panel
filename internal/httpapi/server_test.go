@@ -25,8 +25,12 @@ import (
 	"lnmp-panel/internal/auth"
 	"lnmp-panel/internal/env"
 	"lnmp-panel/internal/jobs"
+	"lnmp-panel/internal/nginx"
 	"lnmp-panel/internal/settings"
+	"lnmp-panel/internal/site"
+	"lnmp-panel/internal/ssl"
 	"lnmp-panel/internal/store"
+	"lnmp-panel/internal/template"
 
 	"github.com/pquerna/otp/totp"
 )
@@ -55,16 +59,42 @@ func startTest(t *testing.T) (base, prefix, password string, client *http.Client
 	st := settings.New(db)
 	_ = st.Set("ops_ip_cidrs", "[]")
 	_ = st.Set("bind_mode", "public")
+	tpl := template.New(db)
+	if err := tpl.SyncOfficial(); err != nil {
+		t.Fatal(err)
+	}
+	ngx := nginx.New()
+	ngx.Available = filepath.Join(dir, "avail")
+	ngx.Enabled = filepath.Join(dir, "en")
+	ngx.ConfD = filepath.Join(dir, "conf.d")
+	ngx.AcmeWWW = filepath.Join(dir, "acme")
+	ngx.BackupRoot = filepath.Join(dir, "bak")
+	if err := ngx.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	sites := site.New(db, tpl, ngx)
+	sites.WWW = filepath.Join(dir, "www")
+	sites.SkipNX = true
+	sslSvc := ssl.New(db, sites)
+	sslSvc.Dir = filepath.Join(dir, "certs")
+	sslSvc.AcmeWWW = ngx.AcmeWWW
+	sslSvc.Issuer = ssl.SelfSigner{}
+	jobSvc := jobs.New(db)
 	prefix = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	s := &Server{
-		Prefix:   prefix,
-		Auth:     auth.New(db),
-		Audit:    audit.New(db),
-		Settings: st,
-		Jobs:     jobs.New(db),
-		Started:  time.Now(),
-		Listen:   "127.0.0.1:0",
-		OS:       env.OSInfo{ID: "ubuntu", VersionID: "24.04", Pretty: "Ubuntu 24.04 LTS"},
+		Prefix:    prefix,
+		Auth:      auth.New(db),
+		Audit:     audit.New(db),
+		Settings:  st,
+		Jobs:      jobSvc,
+		Started:   time.Now(),
+		Listen:    "127.0.0.1:0",
+		OS:        env.OSInfo{ID: "ubuntu", VersionID: "24.04", Pretty: "Ubuntu 24.04 LTS"},
+		Tpl:       tpl,
+		Sites:     sites,
+		Nginx:     ngx,
+		SSL:       sslSvc,
+		Installer: &env.NginxInstaller{Jobs: jobSvc, Nginx: ngx},
 	}
 	https := &http.Server{Handler: s.Handler()}
 	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
@@ -370,4 +400,50 @@ func TestRequestIDIgnoresClient(t *testing.T) {
 	if strings.Contains(string(raw), "client-injected") {
 		t.Fatalf("审计采信了客户端 request_id：%s", raw)
 	}
+}
+
+func TestSiteCRUDAndSSL(t *testing.T) {
+	base, prefix, pass, client, _ := startTest(t)
+	api := base + "/" + prefix + "/api/v1"
+	csrf := loginCSRF(t, client, api, "admin", pass)
+	code, e := doJSON(t, client, "POST", api+"/sites", csrf, map[string]any{
+		"site_key": "demo", "name": "演示", "domains": []string{"demo.test"},
+	})
+	if code != 200 || !e.OK {
+		t.Fatalf("建站失败 %d %+v", code, e)
+	}
+	var st map[string]any
+	_ = json.Unmarshal(e.Data, &st)
+	id := int(st["id"].(float64))
+	code, raw := doJSON(t, client, "GET", api+"/sites/"+itoa(id)+"/nginx", csrf, nil)
+	if code != 200 || !raw.OK {
+		t.Fatalf("读 conf %d %+v", code, raw)
+	}
+	code, iss := doJSON(t, client, "POST", api+"/sites/"+itoa(id)+"/ssl/issue", csrf, map[string]any{})
+	if code != 200 || !iss.OK {
+		t.Fatalf("签发 %d %+v", code, iss)
+	}
+	code, got := doJSON(t, client, "GET", api+"/sites/"+itoa(id), csrf, nil)
+	if code != 200 {
+		t.Fatal(got)
+	}
+	var det map[string]any
+	_ = json.Unmarshal(got.Data, &det)
+	if det["ssl_cert"] == "" || det["ssl_cert"] == nil {
+		t.Fatalf("应有证书路径：%s", got.Data)
+	}
+}
+
+func itoa(i int) string {
+	if i == 0 {
+		return "0"
+	}
+	var b [16]byte
+	n := len(b)
+	for i > 0 {
+		n--
+		b[n] = byte('0' + i%10)
+		i /= 10
+	}
+	return string(b[n:])
 }

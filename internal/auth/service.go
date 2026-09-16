@@ -17,12 +17,22 @@ import (
 
 const (
 	SessionTTL     = 2 * time.Hour
+	SessionAbsMax  = 12 * time.Hour
 	FailWindow     = 15 * time.Minute
 	FailThreshold  = 5
 	LockDuration   = 30 * time.Minute
 	PendingTOTPTTL = 5 * time.Minute
 	Issuer         = "LNMP面板"
 )
+
+var dummyHash string
+
+func init() {
+	h, err := HashPassword("timing-pad-not-a-real-password")
+	if err == nil {
+		dummyHash = h
+	}
+}
 
 var (
 	ErrInvalidCreds = errors.New("用户名或密码错误")
@@ -145,12 +155,17 @@ func (s *Service) Login(ip, ua, username, password string) (*LoginResult, error)
 	var hash string
 	var totpOn int
 	err := s.db.SQL.QueryRow(`SELECT password_hash, totp_enabled FROM admin WHERE username = ?`, username).Scan(&hash, &totpOn)
-	if errors.Is(err, sql.ErrNoRows) || (err == nil && !CheckPassword(password, hash)) {
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = CheckPassword(password, dummyHash)
 		_ = s.recordAttempt(ip, username, false)
 		return nil, ErrInvalidCreds
 	}
 	if err != nil {
 		return nil, err
+	}
+	if !CheckPassword(password, hash) {
+		_ = s.recordAttempt(ip, username, false)
+		return nil, ErrInvalidCreds
 	}
 	if totpOn == 1 {
 		ticket, err := randomHex(16)
@@ -198,25 +213,49 @@ func (s *Service) VerifyTOTPLogin(ip, ua, ticket, code string) (*Session, error)
 	return s.createSession(ip, ua)
 }
 
+func totpOpts() totp.ValidateOpts {
+	return totp.ValidateOpts{
+		Period:    30,
+		Skew:      1,
+		Digits:    otp.DigitsSix,
+		Algorithm: otp.AlgorithmSHA1,
+	}
+}
+
+func matchingTOTPStep(code, secret string, now time.Time) (int64, bool) {
+	code = strings.TrimSpace(code)
+	cur := now.Unix() / 30
+	for _, step := range []int64{cur - 1, cur, cur + 1} {
+		t := time.Unix(step*30, 0).UTC()
+		ok, err := totp.ValidateCustom(code, secret, t, totp.ValidateOpts{
+			Period: 30, Skew: 0, Digits: otp.DigitsSix, Algorithm: otp.AlgorithmSHA1,
+		})
+		if err == nil && ok {
+			return step, true
+		}
+	}
+	return 0, false
+}
+
 func (s *Service) checkTOTP(code string) error {
 	var secret []byte
 	var on int
-	if err := s.db.SQL.QueryRow(`SELECT totp_secret, totp_enabled FROM admin WHERE id = 1`).Scan(&secret, &on); err != nil {
+	var last sql.NullInt64
+	if err := s.db.SQL.QueryRow(`SELECT totp_secret, totp_enabled, totp_last_step FROM admin WHERE id = 1`).Scan(&secret, &on, &last); err != nil {
 		return err
 	}
 	if len(secret) == 0 {
 		return ErrBadTOTP
 	}
-	ok, err := totp.ValidateCustom(strings.TrimSpace(code), string(secret), time.Now().UTC(), totp.ValidateOpts{
-		Period:    30,
-		Skew:      1,
-		Digits:    otp.DigitsSix,
-		Algorithm: otp.AlgorithmSHA1,
-	})
-	if err != nil || !ok {
+	step, ok := matchingTOTPStep(code, string(secret), time.Now().UTC())
+	if !ok {
 		return ErrBadTOTP
 	}
-	return nil
+	if last.Valid && last.Int64 == step {
+		return ErrBadTOTP
+	}
+	_, err := s.db.SQL.Exec(`UPDATE admin SET totp_last_step = ? WHERE id = 1`, step)
+	return err
 }
 
 func (s *Service) createSession(ip, ua string) (*Session, error) {
@@ -252,12 +291,22 @@ func (s *Service) GetSession(id, ip string) (*Session, error) {
 	}
 	sess.CreatedAt, _ = time.Parse(time.RFC3339, created)
 	sess.ExpiresAt, _ = time.Parse(time.RFC3339, expires)
-	if time.Now().UTC().After(sess.ExpiresAt) {
+	now := time.Now().UTC()
+	if now.After(sess.CreatedAt.Add(SessionAbsMax)) || now.After(sess.ExpiresAt) {
 		_, _ = s.db.SQL.Exec(`DELETE FROM sessions WHERE id = ?`, id)
 		return nil, ErrNoSession
 	}
 	if sess.IP != ip {
 		return nil, ErrNoSession
+	}
+	slide := now.Add(SessionTTL)
+	abs := sess.CreatedAt.Add(SessionAbsMax)
+	if slide.After(abs) {
+		slide = abs
+	}
+	if slide.After(sess.ExpiresAt) {
+		sess.ExpiresAt = slide
+		_, _ = s.db.SQL.Exec(`UPDATE sessions SET expires_at = ? WHERE id = ?`, slide.Format(time.RFC3339), id)
 	}
 	return &sess, nil
 }
@@ -377,8 +426,19 @@ func (s *Service) DisableTOTP(password string) error {
 	if !CheckPassword(password, hash) {
 		return ErrInvalidCreds
 	}
-	_, err := s.db.SQL.Exec(`UPDATE admin SET totp_enabled = 0, totp_secret = NULL, updated_at = ? WHERE id = 1`, s.db.Now())
+	_, err := s.db.SQL.Exec(`UPDATE admin SET totp_enabled = 0, totp_secret = NULL, totp_last_step = 0, updated_at = ? WHERE id = 1`, s.db.Now())
 	return err
+}
+
+func (s *Service) PurgePending() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	for k, p := range s.pend {
+		if now.After(p.expires) {
+			delete(s.pend, k)
+		}
+	}
 }
 
 func (s *Service) TOTPEnabled() (bool, error) {

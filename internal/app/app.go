@@ -19,8 +19,11 @@ import (
 	"lnmp-panel/internal/env"
 	"lnmp-panel/internal/httpapi"
 	"lnmp-panel/internal/jobs"
+	"lnmp-panel/internal/nginx"
 	"lnmp-panel/internal/scheduler"
 	"lnmp-panel/internal/settings"
+	"lnmp-panel/internal/site"
+	"lnmp-panel/internal/ssl"
 	"lnmp-panel/internal/store"
 	"lnmp-panel/internal/template"
 )
@@ -113,22 +116,42 @@ func Run(cfgPath string, skipOS bool) error {
 	setSvc := settings.New(db)
 	setSvc.SetConfigPath(cfgPath)
 	jobSvc := jobs.New(db)
-	if err := template.New(db).SyncOfficial(); err != nil {
+	tpl := template.New(db)
+	if err := tpl.SyncOfficial(); err != nil {
 		return fmt.Errorf("同步官方模板：%w", err)
 	}
+	ngx := nginx.New()
+	sites := site.New(db, tpl, ngx)
+	sites.SkipNX = !ngx.Installed()
+	sslSvc := ssl.New(db, sites)
+	if skipOS {
+		sslSvc.Issuer = ssl.SelfSigner{}
+	} else {
+		sslSvc.Issuer = ssl.ACMEIssuer{
+			Account: filepath.Join(cfg.DataDir, "secrets", "acme.key"),
+		}
+	}
+	inst := &env.NginxInstaller{Jobs: jobSvc, Nginx: ngx}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go scheduler.New(authSvc).Run(ctx)
+	sch := scheduler.New(authSvc)
+	sch.SetRenewer(sslSvc)
+	go sch.Run(ctx)
 
 	srv := &httpapi.Server{
-		Prefix:   cfg.PathPrefix,
-		Auth:     authSvc,
-		Audit:    auditSvc,
-		Settings: setSvc,
-		Jobs:     jobSvc,
-		Started:  time.Now(),
-		Listen:   cfg.Listen,
-		OS:       osInfo,
+		Prefix:    cfg.PathPrefix,
+		Auth:      authSvc,
+		Audit:     auditSvc,
+		Settings:  setSvc,
+		Jobs:      jobSvc,
+		Started:   time.Now(),
+		Listen:    cfg.Listen,
+		OS:        osInfo,
+		Tpl:       tpl,
+		Sites:     sites,
+		Nginx:     ngx,
+		SSL:       sslSvc,
+		Installer: inst,
 	}
 	https := &http.Server{
 		Addr:         cfg.Listen,

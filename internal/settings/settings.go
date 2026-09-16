@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	panelFS "lnmp-panel/internal/fs"
 	"lnmp-panel/internal/store"
 )
 
@@ -147,7 +148,7 @@ func rewriteListenHost(path, bindMode string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(out, '\n'), 0600)
+	return panelFS.WriteAtomic(path, append(out, '\n'), 0600)
 }
 
 func IPInCIDRs(ip string, cidrs []string) bool {

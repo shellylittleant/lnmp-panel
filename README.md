@@ -23,3 +23,5 @@ go test ./...
 
 二进制：`bin/lnmp-panel`  
 安装后读 `/etc/lnmp-panel/install.info`。
+
+改前端必须跑 `./scripts/build.sh`（或 `cd web && npm run build`）重新生成 `internal/webui/dist` 并与源码一起提交。

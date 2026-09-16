@@ -237,7 +237,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"uptime_sec":  int(time.Since(s.Started).Seconds()),
 		"listen":      s.Listen,
 		"path_prefix": s.Prefix,
-		"services":    map[string]string{"nginx": "未检测", "php": "未检测", "mysql": "未检测"},
+		"services":    map[string]string{"nginx": nginxStatus(s), "php": "未检测", "mysql": "未检测"},
 	})
 }
 
@@ -274,4 +274,11 @@ func (s *Server) handleJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeOK(w, j)
+}
+
+func nginxStatus(s *Server) string {
+	if s.Nginx == nil || !s.Nginx.Installed() {
+		return "未安装"
+	}
+	return "已安装"
 }

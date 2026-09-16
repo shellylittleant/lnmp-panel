@@ -1,0 +1,26 @@
+server {
+    listen 80;
+{{if .SSLCert}}    listen 443 ssl{{if .HTTP2}} http2{{end}};
+{{end}}    server_name {{join .Domains " "}};
+    access_log /var/log/nginx/{{.SiteKey}}.access.log lnmp_panel;
+    error_log /var/log/nginx/{{.SiteKey}}.error.log;
+
+    location /.well-known/acme-challenge/ {
+        alias /var/lib/lnmp-panel/acme-www/;
+        default_type text/plain;
+    }
+{{if .SSLCert}}
+{{indent 4 .SSLSnippet}}
+{{end}}{{if .AccessAllow}}
+{{range .AccessAllow}}    allow {{.}};
+{{end}}    deny all;
+{{end}}{{range .Redirects}}    location = {{.FromPath}} { return {{.Code}} {{.ToURL}}; }
+{{end}}    location / {
+        proxy_pass {{.ProxyPass}};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_http_version 1.1;
+    }
+}
