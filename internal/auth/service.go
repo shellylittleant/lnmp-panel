@@ -31,6 +31,7 @@ var (
 	ErrNoSession    = errors.New("未登录或会话无效")
 	ErrBadTOTP      = errors.New("验证码错误")
 	ErrPolicy       = errors.New("密码不符合策略")
+	ErrTOTPActive   = errors.New("请先关闭 TOTP 再重新绑定")
 )
 
 type Session struct {
@@ -320,6 +321,13 @@ type TOTPSetup struct {
 }
 
 func (s *Service) SetupTOTP() (*TOTPSetup, error) {
+	var on int
+	if err := s.db.SQL.QueryRow(`SELECT totp_enabled FROM admin WHERE id = 1`).Scan(&on); err != nil {
+		return nil, err
+	}
+	if on == 1 {
+		return nil, ErrTOTPActive
+	}
 	var username string
 	if err := s.db.SQL.QueryRow(`SELECT username FROM admin WHERE id = 1`).Scan(&username); err != nil {
 		return nil, err

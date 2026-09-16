@@ -5,17 +5,25 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"os"
 	"strings"
 
 	"lnmp-panel/internal/store"
 )
 
+var ErrSelfLock = errors.New("当前 IP 不在新白名单内，拒绝保存")
+
 type Service struct {
-	db *store.DB
+	db         *store.DB
+	configPath string
 }
 
 func New(db *store.DB) *Service {
 	return &Service{db: db}
+}
+
+func (s *Service) SetConfigPath(p string) {
+	s.configPath = p
 }
 
 func (s *Service) Get(key string) (string, error) {
@@ -78,16 +86,7 @@ type Update struct {
 	OpsIPCIDRs []string `json:"ops_ip_cidrs"`
 }
 
-func (s *Service) Apply(u Update) error {
-	if u.BindMode != nil {
-		v := *u.BindMode
-		if v != "public" && v != "localhost" {
-			return errors.New("bind_mode 只能是 public 或 localhost")
-		}
-		if err := s.Set("bind_mode", v); err != nil {
-			return err
-		}
-	}
+func (s *Service) Apply(u Update, callerIP string) error {
 	if u.OpsIPCIDRs != nil {
 		for _, c := range u.OpsIPCIDRs {
 			if _, _, err := net.ParseCIDR(strings.TrimSpace(c)); err != nil {
@@ -96,12 +95,85 @@ func (s *Service) Apply(u Update) error {
 				}
 			}
 		}
+		if len(u.OpsIPCIDRs) > 0 && !IPInCIDRs(callerIP, u.OpsIPCIDRs) {
+			return ErrSelfLock
+		}
 		b, _ := json.Marshal(u.OpsIPCIDRs)
 		if err := s.Set("ops_ip_cidrs", string(b)); err != nil {
 			return err
 		}
 	}
+	if u.BindMode != nil {
+		v := *u.BindMode
+		if v != "public" && v != "localhost" {
+			return errors.New("bind_mode 只能是 public 或 localhost")
+		}
+		if err := s.Set("bind_mode", v); err != nil {
+			return err
+		}
+		if s.configPath != "" {
+			if err := rewriteListenHost(s.configPath, v); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
+}
+
+func rewriteListenHost(path, bindMode string) error {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		return err
+	}
+	listen, _ := cfg["listen"].(string)
+	if listen == "" {
+		return errors.New("配置缺少 listen")
+	}
+	_, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return err
+	}
+	host := "0.0.0.0"
+	if bindMode == "localhost" {
+		host = "127.0.0.1"
+	}
+	cfg["listen"] = net.JoinHostPort(host, port)
+	cfg["bind_mode"] = bindMode
+	out, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(out, '\n'), 0600)
+}
+
+func IPInCIDRs(ip string, cidrs []string) bool {
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return false
+	}
+	if v4 := parsed.To4(); v4 != nil {
+		parsed = v4
+	}
+	for _, c := range cidrs {
+		c = strings.TrimSpace(c)
+		if ipn := net.ParseIP(c); ipn != nil {
+			if v4 := ipn.To4(); v4 != nil {
+				ipn = v4
+			}
+			if ipn.Equal(parsed) {
+				return true
+			}
+		}
+		_, n, err := net.ParseCIDR(c)
+		if err == nil && n.Contains(parsed) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) IPAllowed(ip string) (bool, error) {
@@ -119,21 +191,7 @@ func (s *Service) IPAllowed(ip string) (bool, error) {
 	if len(cidrs) == 0 {
 		return true, nil
 	}
-	parsed := net.ParseIP(ip)
-	if parsed == nil {
-		return false, nil
-	}
-	for _, c := range cidrs {
-		c = strings.TrimSpace(c)
-		if ipn := net.ParseIP(c); ipn != nil && ipn.Equal(parsed) {
-			return true, nil
-		}
-		_, n, err := net.ParseCIDR(c)
-		if err == nil && n.Contains(parsed) {
-			return true, nil
-		}
-	}
-	return false, nil
+	return IPInCIDRs(ip, cidrs), nil
 }
 
 func (s *Service) IsOpsIP(ip string) (bool, error) {

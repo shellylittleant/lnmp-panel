@@ -98,17 +98,7 @@ func (db *DB) Migrate() error {
 		if err != nil {
 			return err
 		}
-		// 001 含 schema_migrations 全量定义，已存在则跳过该句
-		sqlText := string(body)
-		if ver == 1 {
-			sqlText = strings.Replace(sqlText, `CREATE TABLE schema_migrations (
-  version INTEGER PRIMARY KEY,
-  applied_at TEXT NOT NULL
-);
-
-`, "", 1)
-		}
-		if _, err := tx.Exec(sqlText); err != nil {
+		if _, err := tx.Exec(string(body)); err != nil {
 			_ = tx.Rollback()
 			return fmt.Errorf("执行 %s：%w", name, err)
 		}

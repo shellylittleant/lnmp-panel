@@ -52,14 +52,38 @@ func CLI(args []string) error {
 	}
 }
 
+func stripHiddenFlag(args []string, name string) ([]string, bool) {
+	forms := []string{"--" + name, "-" + name}
+	out := make([]string, 0, len(args))
+	on := false
+	for _, a := range args {
+		hit := false
+		for _, f := range forms {
+			if a == f || a == f+"=true" {
+				on = true
+				hit = true
+				break
+			}
+			if a == f+"=false" {
+				hit = true
+				break
+			}
+		}
+		if !hit {
+			out = append(out, a)
+		}
+	}
+	return out, on
+}
+
 func runCmd(args []string) error {
+	args, skipOS := stripHiddenFlag(args, "skip-os-check")
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	cfgPath := fs.String("config", "/etc/lnmp-panel/panel.json", "引导配置路径")
-	skipOS := fs.Bool("skip-os-check", false, "仅供测试：跳过 Ubuntu 检查")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	return Run(*cfgPath, *skipOS)
+	return Run(*cfgPath, skipOS)
 }
 
 func Run(cfgPath string, skipOS bool) error {
@@ -87,6 +111,7 @@ func Run(cfgPath string, skipOS bool) error {
 	authSvc := auth.New(db)
 	auditSvc := audit.New(db)
 	setSvc := settings.New(db)
+	setSvc.SetConfigPath(cfgPath)
 	jobSvc := jobs.New(db)
 	if err := template.New(db).SyncOfficial(); err != nil {
 		return fmt.Errorf("同步官方模板：%w", err)
@@ -154,6 +179,7 @@ type BootstrapResult struct {
 }
 
 func bootstrapCmd(args []string) error {
+	args, skipOS := stripHiddenFlag(args, "skip-os-check")
 	fs := flag.NewFlagSet("bootstrap", flag.ContinueOnError)
 	dataDir := fs.String("data-dir", "/var/lib/lnmp-panel", "数据目录")
 	etcDir := fs.String("etc-dir", "/etc/lnmp-panel", "配置目录")
@@ -161,7 +187,6 @@ func bootstrapCmd(args []string) error {
 	prefix := fs.String("prefix", "", "路径前缀，空则随机")
 	password := fs.String("password", "", "管理员密码，空则随机")
 	bindMode := fs.String("bind-mode", "public", "public 或 localhost")
-	skipOS := fs.Bool("skip-os-check", false, "仅供测试")
 	ops := fs.String("ops-cidr", "", "运维 CIDR，逗号分隔")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -173,7 +198,7 @@ func bootstrapCmd(args []string) error {
 		Prefix:   *prefix,
 		Password: *password,
 		BindMode: *bindMode,
-		SkipOS:   *skipOS,
+		SkipOS:   skipOS,
 		OpsCIDR:  *ops,
 	})
 	if err != nil {

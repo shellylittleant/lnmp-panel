@@ -17,6 +17,7 @@ import (
 	"net/http/cookiejar"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -135,6 +136,11 @@ func genTestCert(certPath, keyPath string) error {
 
 func doJSON(t *testing.T, client *http.Client, method, url, csrf string, body any) (int, envlope) {
 	t.Helper()
+	return doJSONH(t, client, method, url, csrf, body, nil)
+}
+
+func doJSONH(t *testing.T, client *http.Client, method, url, csrf string, body any, extra http.Header) (int, envlope) {
+	t.Helper()
 	var rdr io.Reader
 	if body != nil {
 		b, _ := json.Marshal(body)
@@ -150,6 +156,11 @@ func doJSON(t *testing.T, client *http.Client, method, url, csrf string, body an
 	if csrf != "" {
 		req.Header.Set("X-CSRF-Token", csrf)
 	}
+	for k, vs := range extra {
+		for _, v := range vs {
+			req.Header.Set(k, v)
+		}
+	}
 	res, err := client.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -161,6 +172,22 @@ func doJSON(t *testing.T, client *http.Client, method, url, csrf string, body an
 		_ = json.Unmarshal(b, &e)
 	}
 	return res.StatusCode, e
+}
+
+func loginCSRF(t *testing.T, client *http.Client, api, user, pass string) string {
+	t.Helper()
+	code, e := doJSON(t, client, "POST", api+"/auth/login", "", map[string]string{"username": user, "password": pass})
+	if code != 200 || !e.OK {
+		t.Fatalf("登录失败 %d %+v", code, e)
+	}
+	_, sess := doJSON(t, client, "GET", api+"/auth/session", "", nil)
+	var data map[string]any
+	_ = json.Unmarshal(sess.Data, &data)
+	csrf, _ := data["csrf_token"].(string)
+	if csrf == "" {
+		t.Fatal("缺少 csrf")
+	}
+	return csrf
 }
 
 func TestRootIs404(t *testing.T) {
@@ -273,5 +300,74 @@ func TestTOTPLogin(t *testing.T) {
 	code, ver := doJSON(t, c2, "POST", api+"/auth/totp/verify", "", map[string]string{"ticket": ticket, "code": codeNow})
 	if code != 200 || !ver.OK {
 		t.Fatalf("totp verify %d %+v", code, ver)
+	}
+}
+
+func TestWhitelistRejectsSelfLock(t *testing.T) {
+	base, prefix, pass, client, _ := startTest(t)
+	api := base + "/" + prefix + "/api/v1"
+	csrf := loginCSRF(t, client, api, "admin", pass)
+	code, e := doJSON(t, client, "PUT", api+"/settings", csrf, map[string]any{
+		"ops_ip_cidrs": []string{"10.0.0.0/8"},
+	})
+	if code != 400 || e.OK {
+		t.Fatalf("自锁应 400，得到 %d %+v", code, e)
+	}
+	if e.Error == nil || e.Error.Message != "当前 IP 不在新白名单内，拒绝保存" {
+		t.Fatalf("错误文案不符：%+v", e.Error)
+	}
+	code, sess := doJSON(t, client, "GET", api+"/auth/session", "", nil)
+	if code != 200 || !sess.OK {
+		t.Fatalf("拒绝后会话应仍可用，得到 %d", code)
+	}
+	code, ok := doJSON(t, client, "PUT", api+"/settings", csrf, map[string]any{
+		"ops_ip_cidrs": []string{"127.0.0.1"},
+	})
+	if code != 200 || !ok.OK {
+		t.Fatalf("包含自己的白名单应成功 %d %+v", code, ok)
+	}
+}
+
+func TestTOTPSetupConflictWhenEnabled(t *testing.T) {
+	base, prefix, pass, client, _ := startTest(t)
+	api := base + "/" + prefix + "/api/v1"
+	csrf := loginCSRF(t, client, api, "admin", pass)
+	_, setup := doJSON(t, client, "POST", api+"/auth/totp/setup", csrf, map[string]any{})
+	var st auth.TOTPSetup
+	_ = json.Unmarshal(setup.Data, &st)
+	codeNow, err := totp.GenerateCode(st.Secret, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, en := doJSON(t, client, "POST", api+"/auth/totp/enable", csrf, map[string]string{"code": codeNow})
+	if code != 200 || !en.OK {
+		t.Fatalf("enable %d %+v", code, en)
+	}
+	code, again := doJSON(t, client, "POST", api+"/auth/totp/setup", csrf, map[string]any{})
+	if code != 409 || again.OK {
+		t.Fatalf("已开启时 setup 应 409，得到 %d %+v", code, again)
+	}
+	_, sess := doJSON(t, client, "GET", api+"/auth/session", "", nil)
+	var data map[string]any
+	_ = json.Unmarshal(sess.Data, &data)
+	if data["totp_enabled"] != true {
+		t.Fatalf("TOTP 不得被关闭：%s", sess.Data)
+	}
+}
+
+func TestRequestIDIgnoresClient(t *testing.T) {
+	base, prefix, pass, client, _ := startTest(t)
+	api := base + "/" + prefix + "/api/v1"
+	csrf := loginCSRF(t, client, api, "admin", pass)
+	hdr := http.Header{}
+	hdr.Set("X-Request-Id", "client-injected")
+	code, e := doJSONH(t, client, "PUT", api+"/settings", csrf, map[string]any{"ops_ip_cidrs": []string{}}, hdr)
+	if code != 200 || !e.OK {
+		t.Fatalf("保存失败 %d %+v", code, e)
+	}
+	_, au := doJSON(t, client, "GET", api+"/audit", csrf, nil)
+	raw, _ := json.Marshal(au.Data)
+	if strings.Contains(string(raw), "client-injected") {
+		t.Fatalf("审计采信了客户端 request_id：%s", raw)
 	}
 }

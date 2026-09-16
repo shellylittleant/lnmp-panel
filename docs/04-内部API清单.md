@@ -19,7 +19,7 @@
 
 ### 1.2 写操作审计
 
-凡非 GET 的成功或失败（除登录密码字段外）记 `audit_logs`。`action` 用「资源.动词」，如 `site.create`、`firewall.apply`。
+凡非 GET 的成功或失败（除登录密码字段外）记 `audit_logs`。`action` 为 `METHOD path`（例如 `PUT /api/v1/settings`），由 HTTP 中间件自动生成，前端按此筛选。`request_id` 一律由服务端生成，忽略客户端传入的 `X-Request-Id`。
 
 ### 1.3 信封
 
@@ -92,11 +92,11 @@ type HAService interface {
 | DELETE | `/auth/sessions/:id` | 是 | 踢会话；`:id` 亦可为 `current` |
 | GET | `/auth/sessions` | 否 | 会话列表 |
 | POST | `/auth/password` | 是 | 改密，需旧密码 |
-| POST | `/auth/totp/setup` | 是 | 返回 otpauth URI 与密钥，尚未启用 |
+| POST | `/auth/totp/setup` | 是 | 返回 otpauth URI 与密钥，尚未启用。已开启 TOTP 时返回 409，须先用密码关闭再绑定 |
 | POST | `/auth/totp/enable` | 是 | 校验一个码后启用 |
 | POST | `/auth/totp/disable` | 是 | 需密码 |
 | GET | `/settings` | 否 | 面板设置 |
-| PUT | `/settings` | 是 | 白名单、bind_mode、保留期等 |
+| PUT | `/settings` | 是 | 白名单、bind_mode。新白名单非空时必须包含调用方 IP，否则 400。改 bind_mode 同步改写 panel.json 的 listen 主机 |
 | GET | `/status` | 否 | 进程、OS、磁盘、服务是否在跑（阶段 1 给 OS/进程；服务项阶段 3/5 填） |
 | GET | `/audit` | 否 | 查询参数 `from,to,action,ip` |
 | POST | `/panel/restart` | 是 | 重启自身（改端口后） |

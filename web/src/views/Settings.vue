@@ -30,12 +30,16 @@ async function save() {
     .split(",")
     .map((x) => x.trim())
     .filter(Boolean);
-  const r = await api("PUT", "/settings", { bind_mode: bindMode.value, ops_ip_cidrs: cidrs });
+  const r = await api<{ need_restart?: boolean }>("PUT", "/settings", { bind_mode: bindMode.value, ops_ip_cidrs: cidrs });
   if (!r.ok) {
     msg.error(r.error.message);
     return;
   }
-  msg.success("已保存。若修改了监听模式，请到概览页之外使用重启接口。");
+  if (r.data.need_restart) {
+    msg.success("监听模式已修改，点击重启面板生效");
+  } else {
+    msg.success("已保存");
+  }
 }
 
 async function changePw() {

@@ -93,9 +93,7 @@ func (s *Server) withSecurity(next http.Handler) http.Handler {
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'")
-		if r.Header.Get("X-Request-Id") == "" {
-			r.Header.Set("X-Request-Id", newID(8))
-		}
+		r.Header.Set("X-Request-Id", newID(8))
 		ip := clientIP(r)
 		ok, err := s.Settings.IPAllowed(ip)
 		if err != nil {

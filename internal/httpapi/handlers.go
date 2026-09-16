@@ -161,6 +161,10 @@ func (s *Server) handlePassword(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleTOTPSetup(w http.ResponseWriter, r *http.Request) {
 	st, err := s.Auth.SetupTOTP()
+	if errors.Is(err, auth.ErrTOTPActive) {
+		writeErr(w, http.StatusConflict, "conflict", err.Error())
+		return
+	}
 	if err != nil {
 		writeErr(w, 500, "internal", "生成失败")
 		return
@@ -213,7 +217,7 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "invalid", "请求格式错误")
 		return
 	}
-	if err := s.Settings.Apply(u); err != nil {
+	if err := s.Settings.Apply(u, clientIP(r)); err != nil {
 		writeErr(w, 400, "invalid", err.Error())
 		return
 	}
