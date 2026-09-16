@@ -2,12 +2,16 @@ package mysql
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
+	"lnmp-panel/internal/exec"
 	"lnmp-panel/internal/jobs"
 	"lnmp-panel/internal/store"
 	"lnmp-panel/internal/template"
@@ -48,6 +52,79 @@ func TestIdentRejectsInject(t *testing.T) {
 	}
 	if ValidHost("a;b") == nil || ValidHost("a b") == nil {
 		t.Fatal("应拒绝坏 host")
+	}
+}
+
+func TestDropSystemAndUnmanaged(t *testing.T) {
+	s := setupMySQL(t)
+	ctx := context.Background()
+	if err := s.DropDB(ctx, "sys"); err != ErrSystemDB {
+		t.Fatalf("sys: %v", err)
+	}
+	if err := s.DropDB(ctx, "mysql"); err != ErrSystemDB {
+		t.Fatalf("mysql: %v", err)
+	}
+	if err := s.DropDB(ctx, "performance_schema"); err != ErrSystemDB {
+		t.Fatalf("ps: %v", err)
+	}
+	if err := s.DropDB(ctx, "manual_db"); err != ErrUnmanaged {
+		t.Fatalf("unmanaged: %v", err)
+	}
+	if _, err := s.CreateDB(ctx, "blog", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DropDB(ctx, "blog"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReservedUser(t *testing.T) {
+	s := setupMySQL(t)
+	if _, err := s.CreateUser(context.Background(), "root", "localhost", "GoodPass1", nil); err != ErrReservedUser {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestPasswordNotInArgv(t *testing.T) {
+	s := setupMySQL(t)
+	var seen [][]string
+	s.IORunner = func(ctx context.Context, d time.Duration, stdin io.Reader, argv ...string) (exec.Result, error) {
+		seen = append(seen, append([]string{}, argv...))
+		return exec.Result{}, nil
+	}
+	ctx := context.Background()
+	if _, err := s.CreateDB(ctx, "blog", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateUser(ctx, "blogu", "localhost", "SuperSecret1", []string{"blog"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) == 0 {
+		t.Fatal("应调用 IORunner")
+	}
+	for _, argv := range seen {
+		joined := strings.Join(argv, " ")
+		if strings.Contains(joined, "IDENTIFIED BY") || strings.Contains(joined, "SuperSecret1") {
+			t.Fatalf("argv 含密码：%v", argv)
+		}
+	}
+}
+
+func TestStartFailIncludesErrorLog(t *testing.T) {
+	s := setupMySQL(t)
+	p := filepath.Join(t.TempDir(), "error.log")
+	body := ""
+	for i := 0; i < 30; i++ {
+		body += "line\n"
+	}
+	body += "InnoDB: fatal\n"
+	if err := os.WriteFile(p, []byte(body), 0644); err != nil {
+		t.Fatal(err)
+	}
+	s.ErrorLog = p
+	err := s.wrapStartErr("启动 mysqld 失败", exec.Result{}, fmt.Errorf("x"))
+	if err == nil || !strings.Contains(err.Error(), "InnoDB: fatal") {
+		t.Fatalf("%v", err)
 	}
 }
 

@@ -52,6 +52,14 @@ func Run(ctx context.Context, timeout time.Duration, argv ...string) (Result, er
 }
 
 func RunIO(ctx context.Context, timeout time.Duration, stdin io.Reader, argv ...string) (Result, error) {
+	var out bytes.Buffer
+	r, err := RunTo(ctx, timeout, stdin, &out, argv...)
+	r.Stdout = out.String()
+	return r, err
+}
+
+// RunTo 把 stdout 直接写到 w，不在内存里攒整份输出。stderr 仍采集。
+func RunTo(ctx context.Context, timeout time.Duration, stdin io.Reader, stdout io.Writer, argv ...string) (Result, error) {
 	var r Result
 	if len(argv) == 0 {
 		return r, fmt.Errorf("空命令")
@@ -65,8 +73,10 @@ func RunIO(ctx context.Context, timeout time.Duration, stdin io.Reader, argv ...
 		defer cancel()
 	}
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	var out, errb bytes.Buffer
-	cmd.Stdout = &out
+	var errb bytes.Buffer
+	if stdout != nil {
+		cmd.Stdout = stdout
+	}
 	cmd.Stderr = &errb
 	if stdin != nil {
 		cmd.Stdin = stdin
@@ -77,7 +87,6 @@ func RunIO(ctx context.Context, timeout time.Duration, stdin io.Reader, argv ...
 		"APT_LISTCHANGES_FRONTEND=none",
 	)
 	err := cmd.Run()
-	r.Stdout = out.String()
 	r.Stderr = errb.String()
 	if err != nil {
 		return r, fmt.Errorf("%s：%w", argv[0], err)

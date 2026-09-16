@@ -48,7 +48,7 @@ wait_job "$JID" nginx
 
 # PHP PPA + MySQL 官方源
 ENV=$(curl -sk -c /tmp/cj -b /tmp/cj -X POST -H 'Content-Type: application/json' \
-  -H "X-CSRF-Token: $CSRF" -d '{}' "$API/env/install")
+  -H "X-CSRF-Token: $CSRF" -d '{}' "$API/env/php/repo")
 echo "ENV_INSTALL=$ENV"
 EJID=$(printf '%s' "$ENV" | sed -n 's/.*"job_id":"\([^"]*\)".*/\1/p')
 MYSQL_OK=0

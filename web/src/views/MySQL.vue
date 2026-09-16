@@ -2,7 +2,7 @@
 import { onMounted, ref } from "vue";
 import { NAlert, NButton, NCard, NForm, NFormItem, NInput, NSpace, NDataTable, useMessage } from "naive-ui";
 import type { DataTableColumns } from "naive-ui";
-import { api, apiForm, waitJob } from "../api";
+import { api, apiForm, downloadSQL, waitJob } from "../api";
 
 const msg = useMessage();
 const env = ref<any>(null);
@@ -54,7 +54,7 @@ onMounted(load);
 async function installEnv() {
   busy.value = "环境安装";
   try {
-    const r = await api<{ job_id: string }>("POST", "/env/install", {});
+    const r = await api<{ job_id: string }>("POST", "/env/mysql/install", {});
     if (!r.ok) {
       msg.error(r.error.message);
       return;
@@ -117,16 +117,11 @@ async function delUser(id: number) {
 }
 
 async function exp(name: string) {
-  const r = await api<{ sql: string }>("POST", `/mysql/databases/${name}/export`, {});
+  const r = await downloadSQL(`/mysql/databases/${name}/export`, name + ".sql");
   if (!r.ok) {
     msg.error(r.error.message);
     return;
   }
-  const blob = new Blob([r.data.sql], { type: "application/sql" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = name + ".sql";
-  a.click();
 }
 
 async function imp() {
@@ -188,7 +183,7 @@ async function useTpl() {
     <n-card title="MySQL">
       <p v-if="env">官方源：{{ env.mysql_official_source ? "已配置" : "未配置" }}；{{ env.mysql }}</p>
       <n-space>
-        <n-button type="primary" :disabled="!!busy" @click="installEnv">安装 PHP 源与 MySQL</n-button>
+        <n-button type="primary" :disabled="!!busy" @click="installEnv">从官方源安装 MySQL</n-button>
         <span v-if="busy">{{ busy }}</span>
       </n-space>
     </n-card>
@@ -222,6 +217,7 @@ async function useTpl() {
     <n-card title="面板托管 my.cnf 片段">
       <n-alert v-if="drifted" type="warning" title="配置漂移">磁盘与面板上次写入不一致。</n-alert>
       <n-alert v-if="rawMode" type="info" title="原文模式">表单只读，请先恢复模板。</n-alert>
+      <n-alert type="warning" title="保存会重启 MySQL">所有数据库连接会断开，请确认无进行中的导入后再保存。</n-alert>
       <n-form>
         <n-form-item label="max_connections"><n-input v-model:value="cnf.max_connections" :disabled="rawMode" /></n-form-item>
         <n-form-item label="innodb_buffer_pool_size"><n-input v-model:value="cnf.innodb_buffer_pool_size" :disabled="rawMode" /></n-form-item>

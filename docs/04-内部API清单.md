@@ -141,7 +141,8 @@ type HAService interface {
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/env` | Nginx/PHP/MySQL 是否已装、版本 |
-| POST | `/env/install` | 安装 PHP PPA 与 MySQL（Nginx 在阶段 2 的对应接口安装）。长时间任务，返回 `{job_id}`，进度只查 `GET /jobs/:id` |
+| POST | `/env/php/repo` | 添加 Ondřej PHP PPA。长时间任务，返回 `{job_id}` |
+| POST | `/env/mysql/install` | 写入 MySQL 官方源并安装 mysql-community-server。长时间任务，返回 `{job_id}`。失败不回退 Ubuntu 源 |
 | GET | `/php/versions` | 已装与可装（≥8.2） |
 | POST | `/php/versions/:ver/install` | apt 安装该版本 fpm/cli |
 | GET | `/php/versions/:ver/extensions` | 已装扩展 |

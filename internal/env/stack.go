@@ -41,42 +41,61 @@ func (s *StackInstaller) run() func(ctx context.Context, d time.Duration, argv .
 	return exec.Run
 }
 
-func (s *StackInstaller) Start(ctx context.Context) (string, error) {
-	id, err := s.Jobs.Start("env-install")
+func (s *StackInstaller) StartPHPRepo(ctx context.Context) (string, error) {
+	id, err := s.Jobs.Start("php-repo")
 	if err != nil {
 		return "", err
 	}
-	go s.runJob(context.Background(), id)
+	go s.runPHPRepo(context.Background(), id)
 	return id, nil
 }
 
-func (s *StackInstaller) runJob(ctx context.Context, id string) {
+func (s *StackInstaller) StartMySQL(ctx context.Context) (string, error) {
+	id, err := s.Jobs.Start("mysql-install")
+	if err != nil {
+		return "", err
+	}
+	go s.runMySQL(context.Background(), id)
+	return id, nil
+}
+
+func (s *StackInstaller) runPHPRepo(ctx context.Context, id string) {
 	run := s.run()
 	if !s.SkipExec {
-		s.Jobs.Update(id, "apt-update", "更新软件包索引", 8)
+		s.Jobs.Update(id, "apt-update", "更新软件包索引", 20)
 		if r, err := run(ctx, 5*time.Minute, "/usr/bin/apt-get", "update"); err != nil {
 			s.Jobs.Finish(id, fmt.Errorf("apt-get update 失败：%s", exec.Clip(r.Stderr+" "+r.Stdout)))
 			return
 		}
-		s.Jobs.Update(id, "deps", "安装 add-apt-repository 依赖", 16)
+		s.Jobs.Update(id, "deps", "安装 add-apt-repository 依赖", 40)
 		if r, err := run(ctx, 10*time.Minute, "/usr/bin/apt-get", "install", "-y",
 			"software-properties-common", "ca-certificates", "gnupg"); err != nil {
 			s.Jobs.Finish(id, fmt.Errorf("安装依赖失败：%s", exec.Clip(r.Stderr+" "+r.Stdout)))
 			return
 		}
-		s.Jobs.Update(id, "ppa", "添加 Ondřej PHP PPA", 28)
+		s.Jobs.Update(id, "ppa", "添加 Ondřej PHP PPA", 70)
 		if r, err := run(ctx, 5*time.Minute, "/usr/bin/add-apt-repository", "-y", "ppa:ondrej/php"); err != nil {
 			s.Jobs.Finish(id, fmt.Errorf("添加 PPA 失败：%s", exec.Clip(r.Stderr+" "+r.Stdout)))
 			return
 		}
+		s.Jobs.Update(id, "apt-update-2", "更新索引（含 PPA）", 90)
+		if r, err := run(ctx, 5*time.Minute, "/usr/bin/apt-get", "update"); err != nil {
+			s.Jobs.Finish(id, fmt.Errorf("PPA 后 apt-get update 失败：%s", exec.Clip(r.Stderr+" "+r.Stdout)))
+			return
+		}
 	}
-	s.Jobs.Update(id, "mysql-repo", "写入 MySQL 官方 apt 源", 45)
+	s.Jobs.Finish(id, nil)
+}
+
+func (s *StackInstaller) runMySQL(ctx context.Context, id string) {
+	run := s.run()
+	s.Jobs.Update(id, "mysql-repo", "写入 MySQL 官方 apt 源", 20)
 	if err := s.writeMySQLRepo(); err != nil {
 		s.Jobs.Finish(id, err)
 		return
 	}
 	if !s.SkipExec {
-		s.Jobs.Update(id, "apt-update-2", "再次更新索引（含 PPA 与官方 MySQL）", 55)
+		s.Jobs.Update(id, "apt-update", "更新索引（官方 MySQL）", 40)
 		if r, err := run(ctx, 5*time.Minute, "/usr/bin/apt-get", "update"); err != nil {
 			s.Jobs.Finish(id, fmt.Errorf("官方源 apt-get update 失败（未回退 Ubuntu mysql）：%s", exec.Clip(r.Stderr+" "+r.Stdout)))
 			return
@@ -88,7 +107,7 @@ func (s *StackInstaller) runJob(ctx context.Context, id string) {
 		s.Jobs.Update(id, "mysql-pkg", "从官方源安装 mysql-community-server", 70)
 		show, err := run(ctx, 30*time.Second, "/usr/bin/apt-cache", "show", "mysql-community-server")
 		if err != nil || !strings.Contains(show.Stdout, "Package: mysql-community-server") {
-			s.Jobs.Finish(id, fmt.Errorf("MySQL 官方源没有 mysql-community-server（当前架构 %s）。官方 noble 仓库目前只有 amd64/i386。未回退 Ubuntu 的 mysql-server。PPA 已添加，可继续安装 PHP 版本", runtime.GOARCH))
+			s.Jobs.Finish(id, fmt.Errorf("MySQL 官方源没有 mysql-community-server（当前架构 %s）。官方 noble 仓库目前只有 amd64/i386。未回退 Ubuntu 的 mysql-server", runtime.GOARCH))
 			return
 		}
 		r, err := run(ctx, 15*time.Minute, "/usr/bin/apt-get", "install", "-y",

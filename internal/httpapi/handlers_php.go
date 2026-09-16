@@ -7,12 +7,25 @@ import (
 	"lnmp-panel/internal/php"
 )
 
-func (s *Server) handleEnvInstall(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handlePHPRepo(w http.ResponseWriter, r *http.Request) {
 	if s.Stack == nil {
 		writeErr(w, 500, "internal", "安装器未初始化")
 		return
 	}
-	id, err := s.Stack.Start(r.Context())
+	id, err := s.Stack.StartPHPRepo(r.Context())
+	if err != nil {
+		writeErr(w, 409, "conflict", err.Error())
+		return
+	}
+	writeOK(w, map[string]any{"job_id": id})
+}
+
+func (s *Server) handleMySQLInstall(w http.ResponseWriter, r *http.Request) {
+	if s.Stack == nil {
+		writeErr(w, 500, "internal", "安装器未初始化")
+		return
+	}
+	id, err := s.Stack.StartMySQL(r.Context())
 	if err != nil {
 		writeErr(w, 409, "conflict", err.Error())
 		return
@@ -26,7 +39,7 @@ func writePHPErr(w http.ResponseWriter, err error) {
 		writeErr(w, 404, "not_found", err.Error())
 	case errors.Is(err, php.ErrDrift), errors.Is(err, php.ErrRawMode):
 		writeErr(w, 409, "conflict", err.Error())
-	case errors.Is(err, php.ErrPPA), errors.Is(err, php.ErrVersion):
+	case errors.Is(err, php.ErrPPA), errors.Is(err, php.ErrVersion), errors.Is(err, php.ErrUnavailable):
 		writeErr(w, 400, "not_supported", err.Error())
 	default:
 		writeErr(w, 400, "invalid", err.Error())
@@ -50,7 +63,7 @@ func (s *Server) handlePHPInstall(w http.ResponseWriter, r *http.Request) {
 	ver := r.PathValue("ver")
 	id, err := s.PHP.StartInstall(r.Context(), ver)
 	if err != nil {
-		if errors.Is(err, php.ErrPPA) || errors.Is(err, php.ErrVersion) {
+		if errors.Is(err, php.ErrPPA) || errors.Is(err, php.ErrVersion) || errors.Is(err, php.ErrUnavailable) {
 			writePHPErr(w, err)
 			return
 		}

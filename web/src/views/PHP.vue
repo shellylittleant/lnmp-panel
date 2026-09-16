@@ -78,8 +78,8 @@ async function runJob(title: string, path: string, body: unknown = {}) {
   }
 }
 
-function installEnv() {
-  return runJob("环境安装", "/env/install");
+function installPPA() {
+  return runJob("添加 PHP 源", "/env/php/repo");
 }
 function installVer() {
   if (!ver.value) return;
@@ -188,7 +188,7 @@ const current = () => versions.value.find((v) => v.version === ver.value);
     <n-card title="PHP / 环境">
       <p v-if="env">PPA：{{ env.php_ppa ? "已添加" : "未添加" }}；状态：{{ env.php }}</p>
       <n-space>
-        <n-button type="primary" :disabled="!!busy" @click="installEnv">安装 PHP 源与 MySQL</n-button>
+        <n-button type="primary" :disabled="!!busy" @click="installPPA">添加 PHP 源（Ondřej PPA）</n-button>
         <span v-if="busy">{{ busy }}</span>
       </n-space>
     </n-card>

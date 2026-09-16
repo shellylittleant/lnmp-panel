@@ -28,7 +28,8 @@ var (
 	ErrVersion  = errors.New("只支持 PHP 8.2 及以上，格式如 8.3")
 	ErrPPA      = errors.New("尚未添加 Ondřej PHP 源，请先执行环境安装")
 	ErrExt      = errors.New("扩展名不合法")
-	ErrForbidden = errors.New("不能通过扩展接口装卸 fpm/cli/common")
+	ErrForbidden   = errors.New("不能通过扩展接口装卸 fpm/cli/common")
+	ErrUnavailable = errors.New("该 PHP 版本当前不可安装")
 )
 
 var verRe = regexp.MustCompile(`^8\.([2-9]|[1-9][0-9]+)$`)
@@ -347,6 +348,20 @@ func (s *Service) StartInstall(ctx context.Context, ver string) (string, error) 
 	}
 	if s.PPACheck != nil && !s.PPACheck() {
 		return "", ErrPPA
+	}
+	items, err := s.List(ctx)
+	if err != nil {
+		return "", err
+	}
+	ok := false
+	for _, it := range items {
+		if it.Version == ver && (it.Available || it.Installed) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return "", ErrUnavailable
 	}
 	id, err := s.Jobs.Start("php-install-" + ver)
 	if err != nil {

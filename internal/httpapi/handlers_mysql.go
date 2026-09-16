@@ -15,6 +15,8 @@ func writeMySQLErr(w http.ResponseWriter, err error) {
 		writeErr(w, 400, "not_supported", err.Error())
 	case errors.Is(err, mysql.ErrNotFound), errors.Is(err, mysql.ErrNotInstalled):
 		writeErr(w, 404, "not_found", err.Error())
+	case errors.Is(err, mysql.ErrSystemDB), errors.Is(err, mysql.ErrUnmanaged), errors.Is(err, mysql.ErrReservedUser):
+		writeErr(w, 400, "invalid", err.Error())
 	case errors.Is(err, mysql.ErrDrift), errors.Is(err, mysql.ErrRawMode), errors.Is(err, mysql.ErrDup):
 		writeErr(w, 409, "conflict", err.Error())
 	default:
@@ -58,12 +60,13 @@ func (s *Server) handleMySQLDBDrop(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleMySQLExport(w http.ResponseWriter, r *http.Request) {
-	b, err := s.MySQL.Export(r.Context(), r.PathValue("name"))
-	if err != nil {
+	name := r.PathValue("name")
+	w.Header().Set("Content-Type", "application/sql; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`.sql"`)
+	if err := s.MySQL.ExportTo(r.Context(), name, w); err != nil {
 		writeMySQLErr(w, err)
 		return
 	}
-	writeOK(w, map[string]any{"sql": string(b)})
 }
 
 func (s *Server) handleMySQLImport(w http.ResponseWriter, r *http.Request) {

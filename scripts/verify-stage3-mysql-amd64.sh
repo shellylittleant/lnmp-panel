@@ -22,7 +22,7 @@ curl -sk -c /tmp/cj -b /tmp/cj -H 'Content-Type: application/json' \
 SESS=$(curl -sk -c /tmp/cj -b /tmp/cj "$API/auth/session")
 CSRF=$(printf '%s' "$SESS" | sed -n 's/.*"csrf_token":"\([^"]*\)".*/\1/p')
 ENV=$(curl -sk -c /tmp/cj -b /tmp/cj -X POST -H 'Content-Type: application/json' \
-  -H "X-CSRF-Token: $CSRF" -d '{}' "$API/env/install")
+  -H "X-CSRF-Token: $CSRF" -d '{}' "$API/env/mysql/install")
 echo "ENV=$ENV"
 JID=$(printf '%s' "$ENV" | sed -n 's/.*"job_id":"\([^"]*\)".*/\1/p')
 for i in $(seq 1 180); do

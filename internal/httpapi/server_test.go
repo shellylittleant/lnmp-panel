@@ -482,7 +482,7 @@ func TestStage3PHPMySQLAPI(t *testing.T) {
 	if code != 200 || !e.OK {
 		t.Fatalf("create user %d %+v", code, e)
 	}
-	code, e = doJSON(t, client, "POST", api+"/env/install", csrf, map[string]any{})
+	code, e = doJSON(t, client, "POST", api+"/env/php/repo", csrf, map[string]any{})
 	if code != 200 || !e.OK {
 		t.Fatalf("env install %d %+v", code, e)
 	}

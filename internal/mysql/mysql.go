@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -33,7 +34,18 @@ var (
 	ErrDup         = errors.New("已存在")
 	ErrNotFound    = errors.New("不存在")
 	ErrOfficial    = errors.New("未配置 MySQL 官方 apt 源，请先执行环境安装")
+	ErrSystemDB    = errors.New("系统库不可删除")
+	ErrUnmanaged   = errors.New("该库非面板创建，请手动处理")
+	ErrReservedUser = errors.New("不能创建系统保留账号")
 )
+
+var systemDBs = map[string]bool{
+	"mysql": true, "sys": true, "information_schema": true, "performance_schema": true,
+}
+
+var reservedUsers = map[string]bool{
+	"root": true, "mysql.sys": true, "mysql.session": true, "mysql.infoschema": true,
+}
 
 var identRe = regexp.MustCompile(`^[A-Za-z0-9_]{1,64}$`)
 var hostRe = regexp.MustCompile(`^(%|localhost|[A-Za-z0-9._:-]+)$`)
@@ -57,17 +69,20 @@ func ValidHost(h string) error {
 }
 
 type Runner func(ctx context.Context, d time.Duration, argv ...string) (exec.Result, error)
+type IORunner func(ctx context.Context, d time.Duration, stdin io.Reader, argv ...string) (exec.Result, error)
 
 type Service struct {
 	db         *store.DB
 	tpl        *template.Service
 	Jobs       *jobs.Service
 	Runner     Runner
+	IORunner   IORunner
 	CNFPath    string
 	Defaults   string // --defaults-extra-file
 	Socket     string
 	BackupRoot string
 	TmpDir     string
+	ErrorLog   string
 	SkipExec   bool
 	mu         sync.Mutex
 }
@@ -83,6 +98,7 @@ func New(db *store.DB, tpl *template.Service, j *jobs.Service) *Service {
 		Socket:     "/var/run/mysqld/mysqld.sock",
 		BackupRoot: "/var/lib/lnmp-panel/backups/mysql",
 		TmpDir:     "/var/lib/lnmp-panel/tmp",
+		ErrorLog:   "/var/log/mysql/error.log",
 	}
 }
 
@@ -111,9 +127,6 @@ func (s *Service) Installed() bool {
 }
 
 func (s *Service) mysqldBin() string {
-	if _, err := os.Stat("/usr/sbin/mysqld"); err == nil {
-		return "/usr/sbin/mysqld"
-	}
 	return "/usr/sbin/mysqld"
 }
 
@@ -401,14 +414,45 @@ func (s *Service) startDaemon(ctx context.Context) error {
 	if _, err := os.Stat(filepath.Join(datadir, "mysql")); err != nil {
 		r, err := s.run()(ctx, 2*time.Minute, s.mysqldBin(), "--initialize-insecure", "--user=mysql")
 		if err != nil {
-			return fmt.Errorf("mysqld --initialize-insecure 失败：%s", exec.Clip(r.Stderr+" "+r.Stdout))
+			return s.wrapStartErr("mysqld --initialize-insecure 失败", r, err)
 		}
 	}
 	r, err := s.run()(ctx, 30*time.Second, s.mysqldBin(), "--user=mysql", "--daemonize")
 	if err != nil {
-		return fmt.Errorf("启动 mysqld 失败：%s", exec.Clip(r.Stderr+" "+r.Stdout))
+		return s.wrapStartErr("启动 mysqld 失败", r, err)
 	}
 	return nil
+}
+
+func (s *Service) wrapStartErr(prefix string, r exec.Result, err error) error {
+	msg := strings.TrimSpace(r.Stderr + " " + r.Stdout)
+	if err != nil && msg == "" {
+		msg = err.Error()
+	}
+	tail := tailLines(s.ErrorLog, 20)
+	if tail != "" {
+		if msg != "" {
+			msg += "；"
+		}
+		msg += "error.log：" + exec.Clip(tail)
+	}
+	if msg == "" {
+		msg = "无输出"
+	}
+	return fmt.Errorf("%s：%s", prefix, msg)
+}
+
+func tailLines(path string, n int) string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(strings.ReplaceAll(string(b), "\r\n", "\n"), "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	out := strings.TrimSpace(strings.Join(lines, "\n"))
+	return out
 }
 
 func (s *Service) waitReady(ctx context.Context) error {
@@ -453,12 +497,22 @@ func quoteSQL(s string) string {
 	return "'" + s + "'"
 }
 
+func (s *Service) runIO() IORunner {
+	if s.IORunner != nil {
+		return s.IORunner
+	}
+	return exec.RunIO
+}
+
 func (s *Service) Exec(ctx context.Context, sqlText string) (string, error) {
-	if s.SkipExec {
+	args := append(s.clientArgs("/usr/bin/mysql"), "-N")
+	if s.SkipExec && s.IORunner == nil {
 		return "", nil
 	}
-	args := append(s.clientArgs("/usr/bin/mysql"), "-N", "-e", sqlText)
-	r, err := s.run()(ctx, 60*time.Second, args...)
+	r, err := s.runIO()(ctx, 60*time.Second, strings.NewReader(sqlText), args...)
+	if s.SkipExec {
+		return r.Stdout, nil
+	}
 	if err != nil {
 		return "", fmt.Errorf("mysql：%s", exec.Clip(r.Stderr+" "+r.Stdout))
 	}
@@ -492,10 +546,9 @@ func (s *Service) EnsureRoot(ctx context.Context) error {
 		return err
 	}
 	stmt := "ALTER USER 'root'@'localhost' IDENTIFIED BY " + quoteSQL(pass) + "; FLUSH PRIVILEGES;"
-	args := []string{"/usr/bin/mysql", "-uroot", "-e", stmt}
-	r, err := s.run()(ctx, 20*time.Second, args...)
+	args := []string{"/usr/bin/mysql", "-uroot"}
+	r, err := s.runIO()(ctx, 20*time.Second, strings.NewReader(stmt), args...)
 	if err != nil {
-		// 可能已经有密码或 socket 认证方式不同；若用新文件能 ping 则接受
 		if err2 := s.admin(ctx, "ping"); err2 == nil {
 			return nil
 		}
@@ -513,7 +566,7 @@ func (s *Service) ensureRunning(ctx context.Context) error {
 		if err := exec.ReloadOrStart(ctx, s.run(), "mysql", []string{s.mysqldBin(), "--user=mysql", "--daemonize"}); err != nil {
 			r, err2 := s.run()(ctx, 30*time.Second, "/usr/bin/systemctl", "start", "mysql")
 			if err2 != nil {
-				return fmt.Errorf("启动 mysql 失败：%s %v", exec.Clip(r.Stderr), err)
+				return s.wrapStartErr("启动 mysql 失败", r, err2)
 			}
 		}
 		return s.waitReady(ctx)
@@ -625,8 +678,16 @@ func (s *Service) DropDB(ctx context.Context, name string) error {
 	if err := ValidIdent(name); err != nil {
 		return err
 	}
+	if systemDBs[strings.ToLower(name)] {
+		return ErrSystemDB
+	}
 	if err := s.Refuse(ctx); err != nil {
 		return err
+	}
+	var n int
+	_ = s.db.SQL.QueryRow(`SELECT COUNT(1) FROM mysql_databases WHERE name=?`, name).Scan(&n)
+	if n == 0 {
+		return ErrUnmanaged
 	}
 	if _, err := s.Exec(ctx, fmt.Sprintf("DROP DATABASE IF EXISTS `%s`", name)); err != nil {
 		return err
@@ -677,6 +738,9 @@ func (s *Service) userDBs(id int64) []string {
 }
 
 func (s *Service) CreateUser(ctx context.Context, uname, host, password string, dbs []string) (User, error) {
+	if reservedUsers[strings.ToLower(uname)] {
+		return User{}, ErrReservedUser
+	}
 	if err := ValidIdent(uname); err != nil {
 		return User{}, err
 	}
@@ -780,22 +844,23 @@ func (s *Service) DeleteUser(ctx context.Context, id int64) error {
 	return err
 }
 
-func (s *Service) Export(ctx context.Context, name string) ([]byte, error) {
+func (s *Service) ExportTo(ctx context.Context, name string, w io.Writer) error {
 	if err := ValidIdent(name); err != nil {
-		return nil, err
+		return err
 	}
 	if err := s.Refuse(ctx); err != nil {
-		return nil, err
+		return err
 	}
 	if s.SkipExec {
-		return []byte("-- skip\n"), nil
+		_, _ = io.WriteString(w, "-- skip\n")
+		return nil
 	}
 	args := append(s.clientArgs("/usr/bin/mysqldump"), "--single-transaction", "--routines", "--default-character-set=utf8mb4", name)
-	r, err := s.run()(ctx, 5*time.Minute, args...)
+	r, err := exec.RunTo(ctx, 5*time.Minute, nil, w, args...)
 	if err != nil {
-		return nil, fmt.Errorf("mysqldump 失败：%s", exec.Clip(r.Stderr))
+		return fmt.Errorf("mysqldump 失败：%s", exec.Clip(r.Stderr))
 	}
-	return []byte(r.Stdout), nil
+	return nil
 }
 
 func (s *Service) StartImport(ctx context.Context, name string, sqlBytes []byte) (string, error) {

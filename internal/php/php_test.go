@@ -166,6 +166,14 @@ func TestPoolAndUmask(t *testing.T) {
 	}
 }
 
+func TestInstallUnavailableVersion(t *testing.T) {
+	s, _ := setupPHP(t)
+	_, err := s.StartInstall(context.Background(), "8.9")
+	if err != ErrUnavailable {
+		t.Fatalf("got %v", err)
+	}
+}
+
 func TestPPARequired(t *testing.T) {
 	s, _ := setupPHP(t)
 	s.PPACheck = func() bool { return false }
