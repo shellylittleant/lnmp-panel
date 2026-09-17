@@ -5,6 +5,19 @@ import (
 	"testing"
 )
 
+func TestBusyTimeoutIs15s(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(filepath.Join(dir, "panel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var n int
+	if err := db.SQL.QueryRow(`PRAGMA busy_timeout`).Scan(&n); err != nil || n != 15000 {
+		t.Fatalf("busy_timeout=%d %v", n, err)
+	}
+}
+
 func TestMigrateAndTemplateIndexes(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(filepath.Join(dir, "panel.db"))

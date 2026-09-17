@@ -297,19 +297,82 @@ func TestReservedUserDumpEmpty(t *testing.T) {
 			t.Fatalf("%s dump %q %v", u, sqlu, err)
 		}
 	}
-	if got := extractCreateUser("u@localhost\tCREATE USER 'u'@'localhost' IDENTIFIED BY 'x'"); !strings.HasPrefix(got, "CREATE USER") || !strings.HasSuffix(got, ";") {
-		t.Fatal(got)
+}
+
+func TestFormatCreateUserFromPluginHex(t *testing.T) {
+	got, err := FormatCreateUserSQL("migu", "localhost", "caching_sha2_password", "AA01FF")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := extractCreateUser("CREATE USER 'u'@'localhost' IDENTIFIED BY 'x'"); !strings.Contains(got, "CREATE USER") {
-		t.Fatal(got)
+	want := "CREATE USER IF NOT EXISTS 'migu'@'localhost' IDENTIFIED WITH 'caching_sha2_password' AS 0xAA01FF;"
+	if got != want {
+		t.Fatalf("got %s", got)
 	}
+	if _, err := FormatCreateUserSQL("migu", "localhost", "bad';drop", "AA"); err == nil {
+		t.Fatal("插件名应拒绝")
+	}
+	if _, err := FormatCreateUserSQL("migu", "localhost", "caching_sha2_password", "zz"); err == nil {
+		t.Fatal("哈希应拒绝")
+	}
+	plugin, hexHash, err := parsePluginHex("caching_sha2_password\tDEADBEEF\n")
+	if err != nil || plugin != "caching_sha2_password" || hexHash != "DEADBEEF" {
+		t.Fatalf("%s %s %v", plugin, hexHash, err)
+	}
+}
+
+func TestUserDumpSQLUsesMysqlUserNotShowCreate(t *testing.T) {
+	s := setupMySQL(t)
+	var seen []string
 	s.IORunner = func(ctx context.Context, d time.Duration, stdin io.Reader, argv ...string) (exec.Result, error) {
-		return exec.Result{Stdout: "CREATE USER 'blogu'@'localhost' IDENTIFIED BY 'x'"}, nil
+		b, _ := io.ReadAll(stdin)
+		q := string(b)
+		seen = append(seen, q)
+		if strings.Contains(q, "SHOW CREATE USER") {
+			t.Fatal("不得解析 SHOW CREATE USER")
+		}
+		if strings.Contains(q, "HEX(authentication_string)") {
+			return exec.Result{Stdout: "caching_sha2_password\tAABBCC\n"}, nil
+		}
+		if strings.Contains(q, "SHOW GRANTS") {
+			return exec.Result{Stdout: "GRANT ALL ON `migdb`.* TO 'migu'@'localhost'\n"}, nil
+		}
+		return exec.Result{}, nil
 	}
 	s.SkipExec = false
-	sqlu, err := s.UserDumpSQL(context.Background(), "blogu", "localhost")
-	if err != nil || !strings.Contains(sqlu, "CREATE USER IF NOT EXISTS") {
-		t.Fatalf("应生成 IF NOT EXISTS：%q %v", sqlu, err)
+	sqlu, err := s.UserDumpSQL(context.Background(), "migu", "localhost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(sqlu, "IDENTIFIED WITH 'caching_sha2_password' AS 0xAABBCC") {
+		t.Fatal(sqlu)
+	}
+	if strings.Contains(sqlu, "IDENTIFIED BY") {
+		t.Fatal(sqlu)
+	}
+	if !strings.Contains(sqlu, "GRANT ALL ON `migdb`.*") {
+		t.Fatal(sqlu)
+	}
+	if !strings.Contains(strings.Join(seen, "\n"), "FROM mysql.user") {
+		t.Fatalf("应查 mysql.user：%v", seen)
+	}
+}
+
+func TestImportArgsNoForce(t *testing.T) {
+	s := setupMySQL(t)
+	s.Defaults = filepath.Join(t.TempDir(), "missing.cnf")
+	for _, a := range s.importArgs() {
+		if a == "--force" {
+			t.Fatal(s.importArgs())
+		}
+	}
+	foundBatch := false
+	for _, a := range s.importArgs() {
+		if a == "--batch" {
+			foundBatch = true
+		}
+	}
+	if !foundBatch {
+		t.Fatal(s.importArgs())
 	}
 }
 

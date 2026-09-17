@@ -236,6 +236,13 @@ docker exec "$B" bash -c "
 "
 echo TEMPLATES_DB_OK
 
+# S2-b：用迁移过来的密码真登录；面板账号仍能连
+docker exec "$B" mysql -umigu -pGoodPass1 -e 'select 1' migdb >/tmp/migu.out
+grep -q 1 /tmp/migu.out || { echo MIGU_LOGIN_FAIL; cat /tmp/migu.out; exit 1; }
+echo MIGU_LOGIN_OK
+docker exec "$B" mysql --defaults-extra-file=/var/lib/lnmp-panel/secrets/mysql-panel.cnf -N -e 'select 1' | grep -q 1
+echo LNMP_PANEL_MYSQL_OK
+
 docker exec "$A" bash -c "
   curl -sk -c /tmp/cja -b /tmp/cja -X POST -H 'Content-Type: application/json' -H 'X-CSRF-Token: $CSRFA' \
     -d '{}' https://127.0.0.1:${PORTA}/${PFXA}/api/v1/migrate/cancel | grep -q '\"ok\":true'

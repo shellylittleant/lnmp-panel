@@ -544,16 +544,38 @@ func (s *Service) DumpDatabasesTo(ctx context.Context, names []string, w io.Writ
 	return nil
 }
 
-func extractCreateUser(raw string) string {
-	s := strings.TrimSpace(raw)
-	if i := strings.Index(s, "CREATE USER"); i >= 0 {
-		s = s[i:]
+var pluginRe = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
+var authHexRe = regexp.MustCompile(`^[0-9A-Fa-f]+$`)
+
+func FormatCreateUserSQL(user, host, plugin, hexHash string) (string, error) {
+	if err := ValidIdent(user); err != nil {
+		return "", err
 	}
-	s = strings.TrimSpace(s)
-	if s != "" && !strings.HasSuffix(s, ";") {
-		s += ";"
+	if err := ValidHost(host); err != nil {
+		return "", err
 	}
-	return s
+	if !pluginRe.MatchString(plugin) {
+		return "", fmt.Errorf("无效认证插件")
+	}
+	if !authHexRe.MatchString(hexHash) {
+		return "", fmt.Errorf("无效 authentication_string")
+	}
+	return fmt.Sprintf("CREATE USER IF NOT EXISTS %s@%s IDENTIFIED WITH %s AS 0x%s;",
+		quoteSQL(user), quoteSQL(host), quoteSQL(plugin), hexHash), nil
+}
+
+func parsePluginHex(raw string) (plugin, hexHash string, err error) {
+	line := strings.TrimSpace(raw)
+	if i := strings.Index(line, "\n"); i >= 0 {
+		line = strings.TrimSpace(line[:i])
+	}
+	plugin, hexHash, ok := strings.Cut(line, "\t")
+	plugin = strings.TrimSpace(plugin)
+	hexHash = strings.TrimSpace(hexHash)
+	if !ok || plugin == "" || hexHash == "" {
+		return "", "", fmt.Errorf("mysql.user 未返回 plugin 与哈希")
+	}
+	return plugin, hexHash, nil
 }
 
 func (s *Service) UserDumpSQL(ctx context.Context, user, host string) (string, error) {
@@ -566,18 +588,23 @@ func (s *Service) UserDumpSQL(ctx context.Context, user, host string) (string, e
 	if err := ValidHost(host); err != nil {
 		return "", err
 	}
-	create, err := s.Exec(ctx, fmt.Sprintf("SHOW CREATE USER %s@%s", quoteSQL(user), quoteSQL(host)))
+	raw, err := s.Exec(ctx, fmt.Sprintf(
+		"SELECT plugin, HEX(authentication_string) FROM mysql.user WHERE user=%s AND host=%s",
+		quoteSQL(user), quoteSQL(host)))
+	if err != nil {
+		return "", err
+	}
+	plugin, hexHash, err := parsePluginHex(raw)
+	if err != nil {
+		return "", fmt.Errorf("读取 %s@%s 认证信息：%w", user, host, err)
+	}
+	create, err := FormatCreateUserSQL(user, host, plugin, hexHash)
 	if err != nil {
 		return "", err
 	}
 	var b strings.Builder
-	if line := extractCreateUser(create); line != "" {
-		if strings.HasPrefix(line, "CREATE USER ") && !strings.Contains(line, "IF NOT EXISTS") {
-			line = "CREATE USER IF NOT EXISTS " + strings.TrimPrefix(line, "CREATE USER ")
-		}
-		b.WriteString(line)
-		b.WriteByte('\n')
-	}
+	b.WriteString(create)
+	b.WriteByte('\n')
 	grants, err := s.Exec(ctx, fmt.Sprintf("SHOW GRANTS FOR %s@%s", quoteSQL(user), quoteSQL(host)))
 	if err != nil {
 		return "", err
@@ -599,6 +626,10 @@ func (s *Service) UserDumpSQL(ctx context.Context, user, host string) (string, e
 	return b.String(), nil
 }
 
+func (s *Service) importArgs() []string {
+	return append(s.clientArgs("/usr/bin/mysql"), "--batch")
+}
+
 func (s *Service) ImportFrom(ctx context.Context, r io.Reader) error {
 	if s.SkipExec {
 		return nil
@@ -606,10 +637,14 @@ func (s *Service) ImportFrom(ctx context.Context, r io.Reader) error {
 	if err := s.Refuse(ctx); err != nil {
 		return err
 	}
-	args := append(s.clientArgs("/usr/bin/mysql"), "--batch", "--force")
+	args := s.importArgs()
 	res, err := exec.RunTo(ctx, 2*time.Minute, r, io.Discard, args...)
 	if err != nil {
-		return fmt.Errorf("mysql 导入失败：%s", exec.Clip(res.Stderr))
+		msg := strings.TrimSpace(res.Stderr)
+		if msg == "" {
+			msg = err.Error()
+		}
+		return fmt.Errorf("mysql 导入失败：%s", exec.Clip(msg))
 	}
 	return nil
 }

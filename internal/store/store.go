@@ -56,7 +56,7 @@ func finishOpen(sqlDB *sql.DB, path string, maxOpen int) (*DB, error) {
 	for _, p := range []string{
 		`PRAGMA foreign_keys = ON`,
 		`PRAGMA journal_mode = WAL`,
-		`PRAGMA busy_timeout = 5000`,
+		`PRAGMA busy_timeout = 15000`,
 	} {
 		if _, err := sqlDB.Exec(p); err != nil {
 			_ = sqlDB.Close()
