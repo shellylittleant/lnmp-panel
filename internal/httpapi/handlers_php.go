@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"lnmp-panel/internal/php"
+	"lnmp-panel/internal/plugin"
 )
 
 func (s *Server) handlePHPRepo(w http.ResponseWriter, r *http.Request) {
@@ -55,6 +56,14 @@ func (s *Server) handlePHPVersions(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeErr(w, 500, "internal", err.Error())
 		return
+	}
+	if s.Plugins != nil {
+		for _, res := range s.Plugins.RunHook("site.php_versions", plugin.Event{Name: "site.php_versions"}) {
+			extra, _ := res.Data.([]string)
+			for _, v := range extra {
+				items = append(items, php.Version{Version: v, Installed: true})
+			}
+		}
 	}
 	writeOK(w, map[string]any{"items": items, "ppa": php.PPAPresent()})
 }

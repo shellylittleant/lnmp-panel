@@ -50,6 +50,24 @@ export async function downloadSQL(path: string, filename: string): Promise<{ ok:
   return { ok: false, error: { message: "导出失败" } };
 }
 
+export async function downloadPluginFile(path: string, filename: string): Promise<{ ok: true } | { ok: false; error: { message: string } }> {
+  const headers: Record<string, string> = {};
+  if (csrf) headers["X-CSRF-Token"] = csrf;
+  const res = await fetch(panelPrefix() + "/api/v1" + path, { method: "GET", headers, credentials: "include" });
+  const ct = res.headers.get("content-type") || "";
+  if (res.ok && !ct.includes("application/json")) {
+    const blob = await res.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
+    return { ok: true };
+  }
+  const j = (await res.json()) as Envelope<unknown>;
+  if (!j.ok) return { ok: false, error: { message: j.error.message } };
+  return { ok: false, error: { message: "下载失败" } };
+}
+
 export async function apiForm<T>(path: string, form: FormData): Promise<Envelope<T>> {
   const headers: Record<string, string> = {};
   if (csrf) headers["X-CSRF-Token"] = csrf;

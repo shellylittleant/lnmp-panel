@@ -30,6 +30,7 @@ import (
 	"lnmp-panel/internal/mysql"
 	"lnmp-panel/internal/nginx"
 	"lnmp-panel/internal/php"
+	"lnmp-panel/internal/plugin"
 	"lnmp-panel/internal/scheduler"
 	"lnmp-panel/internal/settings"
 	"lnmp-panel/internal/site"
@@ -38,7 +39,7 @@ import (
 	"lnmp-panel/internal/template"
 )
 
-const Version = "0.1.0-stage7"
+const Version = "0.1.0-stage8"
 
 func CLI(args []string) error {
 	if len(args) == 0 {
@@ -248,6 +249,27 @@ func Run(cfgPath string, skipOS bool) error {
 		log.Printf("自我保护：%v", err)
 	}
 
+	plugHost := &plugin.Host{
+		WWWRoot:    sites.WWW,
+		Data:       cfg.DataDir,
+		Secrets:    filepath.Join(cfg.DataDir, "secrets"),
+		GetSetting: func(k string) (string, error) { return setSvc.Get(k) },
+		PutSetting: func(k, v string) error { return setSvc.Set(k, v) },
+		GetConfig: func(id string) (string, error) {
+			var c string
+			err := db.SQL.QueryRow(`SELECT config FROM plugins WHERE id=?`, id).Scan(&c)
+			return c, err
+		},
+		PutConfig: func(id, js string) error {
+			_, err := db.SQL.Exec(`UPDATE plugins SET config=? WHERE id=?`, js, id)
+			return err
+		},
+	}
+	plugReg := plugin.New(db, plugHost)
+	if err := plugReg.Sync(); err != nil {
+		log.Printf("插件同步：%v", err)
+	}
+
 	srv := &httpapi.Server{
 		Prefix:    cfg.PathPrefix,
 		Auth:      authSvc,
@@ -272,6 +294,7 @@ func Run(cfgPath string, skipOS bool) error {
 		Scheduler: sch,
 		Migrate:   mig,
 		HA:        haSvc,
+		Plugins:   plugReg,
 	}
 	baseCtx, baseCancel := context.WithCancel(context.Background())
 	defer baseCancel()

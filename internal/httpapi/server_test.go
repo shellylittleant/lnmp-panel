@@ -35,6 +35,7 @@ import (
 	"lnmp-panel/internal/mysql"
 	"lnmp-panel/internal/nginx"
 	"lnmp-panel/internal/php"
+	"lnmp-panel/internal/plugin"
 	"lnmp-panel/internal/scheduler"
 	"lnmp-panel/internal/settings"
 	"lnmp-panel/internal/site"
@@ -150,6 +151,11 @@ func startTest(t *testing.T) (base, prefix, password string, client *http.Client
 	haSvc.HostKeyPub = mig.HostKeyPub
 	haSvc.SkipExec = true
 	haSvc.DropInRoot = filepath.Join(dir, "systemd")
+	plugReg := plugin.New(db, &plugin.Host{
+		WWWRoot: sites.WWW, Data: dir, Secrets: filepath.Join(dir, "sec"),
+		GetSetting: st.Get, PutSetting: st.Set,
+	})
+	_ = plugReg.Sync()
 	prefix = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	s := &Server{
 		Prefix:    prefix,
@@ -175,6 +181,7 @@ func startTest(t *testing.T) (base, prefix, password string, client *http.Client
 		Scheduler: sch,
 		Migrate:   mig,
 		HA:        haSvc,
+		Plugins:   plugReg,
 	}
 	https := &http.Server{Handler: s.Handler()}
 	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
@@ -762,6 +769,74 @@ func TestPeerStepDown(t *testing.T) {
 	}
 	if !st.Degraded || st.Role != ha.RoleMaster {
 		t.Fatalf("step-down 后 %+v", st)
+	}
+}
+
+type httpStubPlugin struct{}
+
+func (p *httpStubPlugin) ID() string      { return "filexfer" }
+func (p *httpStubPlugin) Name() string    { return "文件上传下载" }
+func (p *httpStubPlugin) Version() string { return "0" }
+func (p *httpStubPlugin) Hooks() []plugin.Hook {
+	return nil
+}
+func (p *httpStubPlugin) Routes() []plugin.Route {
+	return []plugin.Route{{
+		Method: "GET", Path: "ping", Help: "ping",
+		Handle: func(w http.ResponseWriter, r *http.Request) {
+			writeOK(w, map[string]any{"pong": true})
+		},
+	}}
+}
+func (p *httpStubPlugin) Pages() []plugin.Page {
+	return []plugin.Page{{MenuTitle: "文件上传下载", Path: "/files"}}
+}
+func (p *httpStubPlugin) OnStart(plugin.Context) error { return nil }
+func (p *httpStubPlugin) OnStop(plugin.Context) error  { return nil }
+
+func TestPluginDisable404(t *testing.T) {
+	plugin.ResetForTest()
+	t.Cleanup(plugin.ResetForTest)
+	plugin.Register(&httpStubPlugin{})
+	base, prefix, pass, client, srv := startTest(t)
+	api := base + "/" + prefix + "/api/v1"
+	csrf := loginCSRF(t, client, api, "admin", pass)
+	code, e := doJSON(t, client, "GET", api+"/plugins", csrf, nil)
+	if code != 200 || !e.OK {
+		t.Fatalf("list %d %+v", code, e)
+	}
+	code, e = doJSON(t, client, "GET", api+"/plugin/filexfer/ping", csrf, nil)
+	if code != 200 || !e.OK {
+		t.Fatalf("ping %d %+v", code, e)
+	}
+	req, _ := http.NewRequest("GET", base+"/"+prefix+"/files", nil)
+	res, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != 200 {
+		t.Fatalf("启用时页面 %d", res.StatusCode)
+	}
+	code, e = doJSON(t, client, "PUT", api+"/plugins/filexfer", csrf, map[string]any{"enabled": false})
+	if code != 200 || !e.OK {
+		t.Fatalf("disable %d %+v", code, e)
+	}
+	if srv.Plugins.Enabled("filexfer") {
+		t.Fatal("仍启用")
+	}
+	code, e = doJSON(t, client, "GET", api+"/plugin/filexfer/ping", csrf, nil)
+	if code != 404 {
+		t.Fatalf("停用后 API 应为 404，got %d %+v", code, e)
+	}
+	req, _ = http.NewRequest("GET", base+"/"+prefix+"/files", nil)
+	res, err = client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != 404 {
+		t.Fatalf("停用后页面应为 404，got %d", res.StatusCode)
 	}
 }
 

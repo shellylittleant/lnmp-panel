@@ -1,20 +1,32 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
-import { NAlert, NButton, NCard, NSpace, useMessage } from "naive-ui";
+import { NAlert, NButton, NCard, NSpace, NSwitch, useMessage } from "naive-ui";
 import { api, waitJob } from "../api";
 import PHP from "./PHP.vue";
-import Placeholder from "./Placeholder.vue";
 
 const msg = useMessage();
 const env = ref<any>(null);
 const busy = ref("");
+const plugins = ref<{ id: string; name: string; version: string; enabled: boolean; error?: string }[]>([]);
 
 async function load() {
   const r = await api<any>("GET", "/env");
   if (r.ok) env.value = r.data;
+  const p = await api<{ items: typeof plugins.value }>("GET", "/plugins");
+  if (p.ok) plugins.value = p.data.items || [];
 }
 
 onMounted(load);
+
+async function togglePlugin(id: string, enabled: boolean) {
+  const r = await api("PUT", "/plugins/" + id, { enabled });
+  if (!r.ok) {
+    msg.error(r.error.message);
+    return;
+  }
+  msg.success(enabled ? "已启用" : "已停用");
+  await load();
+}
 
 async function runJob(title: string, path: string) {
   busy.value = title;
@@ -52,6 +64,16 @@ async function runJob(title: string, path: string) {
       </p>
       <n-button type="primary" :disabled="!!busy" @click="runJob('安装 MySQL', '/env/mysql/install')">安装 MySQL</n-button>
     </n-card>
-    <Placeholder title="插件" />
+    <n-card title="插件">
+      <p v-if="!plugins.length">当前二进制未编入官方插件。发布构建使用 <code>go build -tags plugin_all</code>。</p>
+      <n-space v-else vertical>
+        <div v-for="it in plugins" :key="it.id" style="display: flex; align-items: center; gap: 12px">
+          <n-switch :value="it.enabled" @update:value="(v: boolean) => togglePlugin(it.id, v)" />
+          <span>{{ it.name }}（{{ it.id }} {{ it.version }}）</span>
+          <n-button v-if="it.enabled && it.id === 'filexfer'" size="small" @click="$router.push('/files')">打开文件上传下载</n-button>
+          <span v-if="it.error" style="color: #d03050">{{ it.error }}</span>
+        </div>
+      </n-space>
+    </n-card>
   </n-space>
 </template>

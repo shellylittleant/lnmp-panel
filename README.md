@@ -11,8 +11,9 @@
 面板骨架：Go HTTPS 服务、登录/TOTP/会话/审计、SQLite、Vue 3 壳、安装脚本、systemd。
 
 ```bash
-# 构建（需 Node 与 Go）
+# 构建（需 Node 与 Go；发布二进制带 plugin_all）
 ./scripts/build.sh
+# 无 tag 与 plugin_all 对照：bash scripts/verify-stage8-plugins.sh
 
 # 仅测试
 go test ./...

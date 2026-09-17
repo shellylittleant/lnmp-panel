@@ -20,6 +20,7 @@ import (
 	"lnmp-panel/internal/mysql"
 	"lnmp-panel/internal/nginx"
 	"lnmp-panel/internal/php"
+	"lnmp-panel/internal/plugin"
 	"lnmp-panel/internal/scheduler"
 	"lnmp-panel/internal/settings"
 	"lnmp-panel/internal/site"
@@ -55,6 +56,7 @@ type Server struct {
 	Scheduler *scheduler.Scheduler
 	Migrate   *migrate.Service
 	HA        *ha.Service
+	Plugins   *plugin.Registry
 }
 
 func (s *Server) Handler() http.Handler {
@@ -139,6 +141,12 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("POST /api/v1/migrate/peer/preflight", s.handleMigratePeerPreflight)
 	api.HandleFunc("POST /api/v1/migrate/peer/apply", s.handleMigratePeerApply)
 	api.HandleFunc("POST /api/v1/migrate/peer/cancel", s.handleMigratePeerCancel)
+	api.HandleFunc("GET /api/v1/plugins", s.requireAuth(s.handlePlugins))
+	api.HandleFunc("PUT /api/v1/plugins/{id}", s.requireAuth(s.handlePluginPut))
+	api.HandleFunc("GET /api/v1/plugin/{id}/{path...}", s.requireAuth(s.handlePluginDispatch))
+	api.HandleFunc("POST /api/v1/plugin/{id}/{path...}", s.requireAuth(s.handlePluginDispatch))
+	api.HandleFunc("PUT /api/v1/plugin/{id}/{path...}", s.requireAuth(s.handlePluginDispatch))
+	api.HandleFunc("DELETE /api/v1/plugin/{id}/{path...}", s.requireAuth(s.handlePluginDispatch))
 	api.HandleFunc("GET /api/v1/ha/status", s.requireAuth(s.handleHAStatus))
 	api.HandleFunc("POST /api/v1/ha/token", s.requireAuth(s.handleHAToken))
 	api.HandleFunc("POST /api/v1/ha/pair", s.requireAuth(s.handleHAPair))
@@ -200,6 +208,12 @@ func (s *Server) spa() http.Handler {
 		if strings.HasPrefix(r.URL.Path, "/assets/") {
 			fileServer.ServeHTTP(w, r)
 			return
+		}
+		if s.Plugins != nil {
+			if is, en := s.Plugins.PageState(r.URL.Path); is && !en {
+				http.NotFound(w, r)
+				return
+			}
 		}
 		base := "/" + strings.Trim(s.Prefix, "/") + "/"
 		b, err := webui.IndexHTML(base)

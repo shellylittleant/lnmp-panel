@@ -5,6 +5,8 @@ import (
 	"os"
 
 	"lnmp-panel/internal/app"
+
+	_ "lnmp-panel/plugins"
 )
 
 func main() {
