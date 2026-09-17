@@ -10,8 +10,12 @@ import (
 	panelFS "lnmp-panel/internal/fs"
 )
 
-const dropInBody = `[Unit]
+const dropInAfterPanel = `[Unit]
 After=lnmp-panel.service
+`
+
+const dropInWantsStack = `[Unit]
+Wants=nginx.service mysql.service
 `
 
 func (s *Service) writeMasterDropIns() error {
@@ -21,9 +25,16 @@ func (s *Service) writeMasterDropIns() error {
 		if err := panelFS.Mkdir(dir, 0755); err != nil {
 			return err
 		}
-		if err := panelFS.WriteAtomic(filepath.Join(dir, "lnmp-panel.conf"), []byte(dropInBody), 0644); err != nil {
+		if err := panelFS.WriteAtomic(filepath.Join(dir, "lnmp-panel.conf"), []byte(dropInAfterPanel), 0644); err != nil {
 			return err
 		}
+	}
+	panelDir := filepath.Join(root, "lnmp-panel.service.d")
+	if err := panelFS.Mkdir(panelDir, 0755); err != nil {
+		return err
+	}
+	if err := panelFS.WriteAtomic(filepath.Join(panelDir, "lnmp-panel.conf"), []byte(dropInWantsStack), 0644); err != nil {
+		return err
 	}
 	s.daemonReload()
 	return nil
@@ -31,7 +42,7 @@ func (s *Service) writeMasterDropIns() error {
 
 func (s *Service) removeDropIns() {
 	root := s.systemdRoot()
-	for _, unit := range []string{"nginx.service", "mysql.service", "mysqld.service"} {
+	for _, unit := range []string{"nginx.service", "mysql.service", "mysqld.service", "lnmp-panel.service"} {
 		_ = os.Remove(filepath.Join(root, unit+".d", "lnmp-panel.conf"))
 	}
 	s.daemonReload()

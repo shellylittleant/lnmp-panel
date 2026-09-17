@@ -223,6 +223,10 @@ echo "STATUS_B=$STB"
 echo "$STA" | grep -q '"role":"master"' || { echo A_NOT_MASTER; exit 1; }
 echo "$STB" | grep -q '"role":"standby"' || { echo B_NOT_STANDBY; exit 1; }
 docker exec "$B" test -L /etc/nginx/sites-enabled/nginx_catchall_404.conf
+PEER_A=$(printf '%s' "$STA" | sed -n 's/.*"peer_address":"\([^"]*\)".*/\1/p')
+echo "PEER_ADDR_A=$PEER_A"
+echo "$PEER_A" | grep -q lnmp-ha-b && { echo A_PEER_IS_HOSTNAME; exit 1; }
+echo "$PEER_A" | grep -Eq 'https://([0-9]+\.){3}[0-9]+:' || echo "$PEER_A" | grep -q 'https://\[' || { echo A_PEER_NOT_IP; exit 1; }
 print_ha after_pair
 echo ROLE_OK
 

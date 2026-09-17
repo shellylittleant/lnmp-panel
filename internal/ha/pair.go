@@ -34,7 +34,7 @@ func (s *Service) Accept(in AcceptIn) (AcceptOut, error) {
 	}
 	now := s.now().Format("2006-01-02T15:04:05Z")
 	_ = now
-	addr := in.Address
+	addr := rewriteURLHost(in.Address, in.From)
 	if addr == "" {
 		addr = in.From
 	}

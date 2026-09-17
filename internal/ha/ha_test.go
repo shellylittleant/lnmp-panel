@@ -105,6 +105,7 @@ func setupHA(t *testing.T) *Service {
 	s.DataDir = dir
 	s.DropInRoot = filepath.Join(dir, "systemd")
 	s.WWW = filepath.Join(dir, "www")
+	s.AuthKeys = filepath.Join(dir, "ak")
 	tpl := template.New(db)
 	mysqlSvc := mysql.New(db, tpl, jobs.New(db))
 	mysqlSvc.SkipExec = true
@@ -116,6 +117,81 @@ func setupHA(t *testing.T) *Service {
 	mig.Secrets = s.Secrets
 	s.Migrate = mig
 	return s
+}
+
+func TestRewriteURLHostUsesSourceIP(t *testing.T) {
+	got := rewriteURLHost("https://VM-0-10-ubuntu:28443/abcdefabcdefabcdefabcdefabcdefab", "203.0.113.9")
+	if got != "https://203.0.113.9:28443/abcdefabcdefabcdefabcdefabcdefab" {
+		t.Fatalf("got %s", got)
+	}
+	got = rewriteURLHost("https://lnmp-ha-b:28443/pfx", "2001:db8::9")
+	if got != "https://[2001:db8::9]:28443/pfx" {
+		t.Fatalf("ipv6 %s", got)
+	}
+	if rewriteURLHost("https://keep.example:1/x", "") != "https://keep.example:1/x" {
+		t.Fatal("无来源 IP 时应保留原地址")
+	}
+}
+
+func TestAcceptRecordsPeerAddressAsIP(t *testing.T) {
+	s := setupHA(t)
+	s.MySQL = nil
+	raw := "aaaaaaaaaaaaaaaa.0123456789abcdef"
+	_, err := s.db.SQL.Exec(`INSERT INTO pairing_tokens(token_hash, expires_at, purpose) VALUES (?,?,?)`,
+		migrate.HashToken(raw), "2099-01-01T00:00:00Z", "ha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.Accept(AcceptIn{
+		Token: raw, SSHPub: "ssh-ed25519 AAAA ha", From: "203.0.113.20",
+		Address: "https://VM-0-10-ubuntu:28443/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		SSHPort: 22, SSHUser: "root", Fingerprint: "fp",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "https://203.0.113.20:28443/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	got, _ := s.Settings.Get("ha_peer_address")
+	if got != want {
+		t.Fatalf("ha_peer_address=%s", got)
+	}
+	var addr string
+	if err := s.db.SQL.QueryRow(`SELECT address FROM peers WHERE role='ha_peer' ORDER BY id DESC LIMIT 1`).Scan(&addr); err != nil {
+		t.Fatal(err)
+	}
+	if addr != want {
+		t.Fatalf("peers.address=%s", addr)
+	}
+	if strings.Contains(addr, "VM-0-10-ubuntu") || strings.Contains(got, "lnmp-ha-b") {
+		t.Fatal("不得保留主机名")
+	}
+}
+
+func TestMasterDropInWantsNginxMySQL(t *testing.T) {
+	s := setupHA(t)
+	if err := s.writeMasterDropIns(); err != nil {
+		t.Fatal(err)
+	}
+	panel := filepath.Join(s.DropInRoot, "lnmp-panel.service.d", "lnmp-panel.conf")
+	b, err := os.ReadFile(panel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "Wants=nginx.service mysql.service") {
+		t.Fatalf("面板 drop-in：%s", b)
+	}
+	ngx := filepath.Join(s.DropInRoot, "nginx.service.d", "lnmp-panel.conf")
+	nb, err := os.ReadFile(ngx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(nb), "After=lnmp-panel.service") {
+		t.Fatalf("nginx drop-in：%s", nb)
+	}
+	s.removeDropIns()
+	if _, err := os.Stat(panel); !os.IsNotExist(err) {
+		t.Fatal("退出主机角色应删除面板 drop-in")
+	}
 }
 
 func TestNextTerm(t *testing.T) {
