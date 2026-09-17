@@ -26,16 +26,16 @@ import (
 )
 
 var (
-	ErrMariaDB     = errors.New("检测到 MariaDB，本面板只管理 MySQL 官方源安装的实例")
+	ErrMariaDB      = errors.New("检测到 MariaDB，本面板只管理 MySQL 官方源安装的实例")
 	ErrNotInstalled = errors.New("尚未安装 MySQL")
-	ErrIdent       = errors.New("名称只允许字母、数字和下划线")
-	ErrDrift       = errors.New("磁盘配置与面板上次写入不一致，请确认后带 force=true 保存")
-	ErrRawMode     = errors.New("处于原文模式，请先恢复为模板渲染")
-	ErrDup         = errors.New("已存在")
-	ErrNotFound    = errors.New("不存在")
-	ErrOfficial    = errors.New("未配置 MySQL 官方 apt 源，请先执行环境安装")
-	ErrSystemDB    = errors.New("系统库不可删除")
-	ErrUnmanaged   = errors.New("该库非面板创建，请手动处理")
+	ErrIdent        = errors.New("名称只允许字母、数字和下划线")
+	ErrDrift        = errors.New("磁盘配置与面板上次写入不一致，请确认后带 force=true 保存")
+	ErrRawMode      = errors.New("处于原文模式，请先恢复为模板渲染")
+	ErrDup          = errors.New("已存在")
+	ErrNotFound     = errors.New("不存在")
+	ErrOfficial     = errors.New("未配置 MySQL 官方 apt 源，请先执行环境安装")
+	ErrSystemDB     = errors.New("系统库不可删除")
+	ErrUnmanaged    = errors.New("该库非面板创建，请手动处理")
 	ErrReservedUser = errors.New("不能创建系统保留账号")
 )
 
@@ -497,6 +497,123 @@ func (s *Service) clientArgs(bin string) []string {
 	return []string{bin, "-uroot"}
 }
 
+func IsReservedUser(name string) bool {
+	return reservedUsers[strings.ToLower(name)]
+}
+
+// DumpManagedArgs 只导面板纳管库，不含 --all-databases。
+func DumpManagedArgs(defaults string, names []string) []string {
+	args := []string{"/usr/bin/mysqldump"}
+	if defaults != "" {
+		args = append(args, "--defaults-extra-file="+defaults)
+	} else {
+		args = append(args, "-uroot")
+	}
+	args = append(args, "--single-transaction", "--routines", "--events", "--databases")
+	args = append(args, names...)
+	return args
+}
+
+func (s *Service) DumpDatabasesTo(ctx context.Context, names []string, w io.Writer) error {
+	if len(names) == 0 {
+		return nil
+	}
+	for _, n := range names {
+		if err := ValidIdent(n); err != nil {
+			return err
+		}
+	}
+	if err := s.Refuse(ctx); err != nil {
+		return err
+	}
+	if s.SkipExec {
+		_, _ = io.WriteString(w, "-- skip-managed\n")
+		return nil
+	}
+	def := ""
+	if s.Defaults != "" {
+		if _, err := os.Stat(s.Defaults); err == nil {
+			def = s.Defaults
+		}
+	}
+	args := DumpManagedArgs(def, names)
+	r, err := exec.RunTo(ctx, 30*time.Minute, nil, w, args...)
+	if err != nil {
+		return fmt.Errorf("mysqldump：%s", exec.Clip(r.Stderr))
+	}
+	return nil
+}
+
+func extractCreateUser(raw string) string {
+	s := strings.TrimSpace(raw)
+	if i := strings.Index(s, "CREATE USER"); i >= 0 {
+		s = s[i:]
+	}
+	s = strings.TrimSpace(s)
+	if s != "" && !strings.HasSuffix(s, ";") {
+		s += ";"
+	}
+	return s
+}
+
+func (s *Service) UserDumpSQL(ctx context.Context, user, host string) (string, error) {
+	if IsReservedUser(user) {
+		return "", nil
+	}
+	if err := ValidIdent(user); err != nil {
+		return "", err
+	}
+	if err := ValidHost(host); err != nil {
+		return "", err
+	}
+	create, err := s.Exec(ctx, fmt.Sprintf("SHOW CREATE USER %s@%s", quoteSQL(user), quoteSQL(host)))
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	if line := extractCreateUser(create); line != "" {
+		if strings.HasPrefix(line, "CREATE USER ") && !strings.Contains(line, "IF NOT EXISTS") {
+			line = "CREATE USER IF NOT EXISTS " + strings.TrimPrefix(line, "CREATE USER ")
+		}
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	grants, err := s.Exec(ctx, fmt.Sprintf("SHOW GRANTS FOR %s@%s", quoteSQL(user), quoteSQL(host)))
+	if err != nil {
+		return "", err
+	}
+	for _, ln := range strings.Split(grants, "\n") {
+		ln = strings.TrimSpace(ln)
+		if ln == "" {
+			continue
+		}
+		if i := strings.Index(ln, "GRANT "); i >= 0 {
+			ln = ln[i:]
+		}
+		if !strings.HasSuffix(ln, ";") {
+			ln += ";"
+		}
+		b.WriteString(ln)
+		b.WriteByte('\n')
+	}
+	return b.String(), nil
+}
+
+func (s *Service) ImportFrom(ctx context.Context, r io.Reader) error {
+	if s.SkipExec {
+		return nil
+	}
+	if err := s.Refuse(ctx); err != nil {
+		return err
+	}
+	args := append(s.clientArgs("/usr/bin/mysql"), "--batch", "--force")
+	res, err := exec.RunTo(ctx, 2*time.Minute, r, io.Discard, args...)
+	if err != nil {
+		return fmt.Errorf("mysql 导入失败：%s", exec.Clip(res.Stderr))
+	}
+	return nil
+}
+
 func quoteSQL(s string) string {
 	s = strings.ReplaceAll(s, `\`, `\\`)
 	s = strings.ReplaceAll(s, `'`, `''`)
@@ -567,6 +684,10 @@ func (s *Service) EnsurePanelUser(ctx context.Context) error {
 		return fmt.Errorf("面板账号无法连接：%w", err)
 	}
 	return nil
+}
+
+func (s *Service) EnsureRunning(ctx context.Context) error {
+	return s.ensureRunning(ctx)
 }
 
 func (s *Service) ensureRunning(ctx context.Context) error {

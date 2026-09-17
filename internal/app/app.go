@@ -231,6 +231,7 @@ func Run(cfgPath string, skipOS bool) error {
 	if skipOS {
 		mig.SkipExec = true
 	}
+	sch.Register("migrate.expire", 24*time.Hour, func(ctx context.Context) error { return mig.ExpireStale() })
 
 	srv := &httpapi.Server{
 		Prefix:    cfg.PathPrefix,

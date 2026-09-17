@@ -67,26 +67,27 @@ type Vars struct {
 }
 
 type View struct {
-	Form             Form    `json:"form"`
-	Content          string  `json:"content"`
-	Drifted          bool    `json:"drifted"`
-	RawMode          bool    `json:"raw_mode"`
-	Pending          bool    `json:"pending"`
-	ConfirmDeadline  *string `json:"confirm_deadline"`
-	LastAppliedAt    string  `json:"last_applied_at"`
-	SSHProtected     bool    `json:"ssh_protected"`
-	PanelProtected   bool    `json:"panel_protected"`
+	Form            Form    `json:"form"`
+	Content         string  `json:"content"`
+	Drifted         bool    `json:"drifted"`
+	RawMode         bool    `json:"raw_mode"`
+	Pending         bool    `json:"pending"`
+	ConfirmDeadline *string `json:"confirm_deadline"`
+	LastAppliedAt   string  `json:"last_applied_at"`
+	SSHProtected    bool    `json:"ssh_protected"`
+	PanelProtected  bool    `json:"panel_protected"`
+	MigratePending  bool    `json:"migrate_pending"`
 }
 
 type Service struct {
-	db         *store.DB
-	tpl        *template.Service
-	Settings   *settings.Service
-	Runner     Runner
-	Canonical  string
-	Draft      string
-	SystemNFT  string
-	BackupRoot string
+	db             *store.DB
+	tpl            *template.Service
+	Settings       *settings.Service
+	Runner         Runner
+	Canonical      string
+	Draft          string
+	SystemNFT      string
+	BackupRoot     string
 	PanelPort      int
 	Window         time.Duration
 	SkipNFT        bool
@@ -300,8 +301,9 @@ func (s *Service) Get() (View, error) {
 	v := View{
 		Form: f, Content: body, Drifted: drifted, RawMode: raw,
 		Pending: pending != "" && deadline != "", LastAppliedAt: applied,
-		SSHProtected: sshProtected(body, f.SSHPorts),
+		SSHProtected:   sshProtected(body, f.SSHPorts),
 		PanelProtected: strings.Contains(body, fmt.Sprintf("tcp dport %d", f.PanelPort)),
+		MigratePending: s.migratePending(),
 	}
 	if v.Pending && deadline != "" {
 		v.ConfirmDeadline = &deadline
@@ -347,6 +349,50 @@ func (s *Service) Put(ctx context.Context, in Form) error {
 		return err
 	}
 	s.saveForm(in)
+	s.clearMigratePending()
+	return s.writeDraft(out, false)
+}
+
+func (s *Service) Form() Form {
+	return s.loadForm()
+}
+
+func (s *Service) migratePending() bool {
+	if s.Settings == nil {
+		return false
+	}
+	v, _ := s.Settings.Get("migrate_firewall_pending")
+	return v == "1"
+}
+
+func (s *Service) clearMigratePending() {
+	if s.Settings != nil {
+		_ = s.Settings.Set("migrate_firewall_pending", "")
+	}
+}
+
+// StageMigrated 按本机 SSH/面板端口重写表单并写入草稿，不写开机文件、不加载。
+func (s *Service) StageMigrated(in Form) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.Ensure(); err != nil {
+		return err
+	}
+	in.PanelPort = s.panelPort()
+	in.SSHPorts = nil
+	in.SSHPort = 0
+	in.normalize(s.panelPort(), s.detectedSSH())
+	if err := in.validate(); err != nil {
+		return err
+	}
+	out, err := s.render(in)
+	if err != nil {
+		return err
+	}
+	s.saveForm(in)
+	if s.Settings != nil {
+		_ = s.Settings.Set("migrate_firewall_pending", "1")
+	}
 	return s.writeDraft(out, false)
 }
 
@@ -494,6 +540,7 @@ func (s *Service) Confirm(ctx context.Context) error {
 	}
 	now := s.db.Now()
 	_, err := s.db.SQL.Exec(`UPDATE firewall_state SET pending_backup=NULL, confirm_deadline=NULL, last_applied_at=? WHERE id=1`, now)
+	s.clearMigratePending()
 	return err
 }
 
@@ -514,6 +561,7 @@ func (s *Service) Rollback(ctx context.Context) error {
 		}
 	}
 	_, err := s.db.SQL.Exec(`UPDATE firewall_state SET pending_backup=NULL, confirm_deadline=NULL WHERE id=1`)
+	s.clearMigratePending()
 	return err
 }
 

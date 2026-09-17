@@ -57,6 +57,7 @@ type Service struct {
 	HTTPDo     func(*http.Request) (*http.Response, error)
 	DialFP     func(ctx context.Context, hostPort string) (string, error)
 	TokenTTL   time.Duration
+	IdleFor    time.Duration
 	Now        func() time.Time
 
 	mu        sync.Mutex
@@ -66,11 +67,36 @@ type Service struct {
 func New(db *store.DB) *Service {
 	return &Service{
 		db: db, WWW: "/var/www", Secrets: "/var/lib/lnmp-panel/secrets",
-		AuthKeys: "/root/.ssh/authorized_keys", SSHUser: "root", SSHPort: 22,
+		AuthKeys: "/root/.ssh/authorized_keys", SSHUser: "root",
 		HostKeyPub: "/etc/ssh/ssh_host_ed25519_key.pub",
-		TokenTTL: 15 * time.Minute, Now: func() time.Time { return time.Now().UTC() },
+		TokenTTL:   15 * time.Minute, IdleFor: 7 * 24 * time.Hour,
+		Now:    func() time.Time { return time.Now().UTC() },
 		Runner: exec.Run, IORunner: exec.RunIO,
 	}
+}
+
+func (s *Service) idleFor() time.Duration {
+	if s.IdleFor > 0 {
+		return s.IdleFor
+	}
+	return 7 * 24 * time.Hour
+}
+
+func (s *Service) sshListenPort() int {
+	if s.SSHPort > 0 {
+		return s.SSHPort
+	}
+	if p := firewall.DetectSSHPorts(); len(p) > 0 {
+		return p[0]
+	}
+	return 22
+}
+
+func (s *Service) dumpFile() string {
+	if s.DataDir == "" {
+		return "/var/lib/lnmp-panel/tmp/migrate-mysql.sql"
+	}
+	return filepath.Join(s.DataDir, "tmp", "migrate-mysql.sql")
 }
 
 type TokenOut struct {
@@ -127,7 +153,7 @@ func (s *Service) Accept(in AcceptIn) (AcceptOut, error) {
 	if used.Valid && used.String != "" {
 		return AcceptOut{}, fmt.Errorf("令牌已使用")
 	}
-	if err := upsertAuthorizedKeys(s.AuthKeys, in.SSHPub); err != nil {
+	if err := upsertAuthorizedKeys(s.AuthKeys, in.SSHPub, in.From); err != nil {
 		return AcceptOut{}, fmt.Errorf("写入授权公钥：%w", err)
 	}
 	now := s.Now().Format(time.RFC3339)
@@ -143,10 +169,7 @@ func (s *Service) Accept(in AcceptIn) (AcceptOut, error) {
 	}
 	id, _ := res.LastInsertId()
 	hostKey, _ := readHostKeyPub(s.HostKeyPub)
-	port := s.SSHPort
-	if port == 0 {
-		port = 22
-	}
+	port := s.sshListenPort()
 	user := s.SSHUser
 	if user == "" {
 		user = "root"
@@ -167,6 +190,34 @@ func (s *Service) validPeerToken(raw string) error {
 	if !used.Valid || used.String == "" {
 		return fmt.Errorf("令牌尚未握手")
 	}
+	if s.stalePairing() {
+		_ = s.ExpireStale()
+		return fmt.Errorf("配对已过期")
+	}
+	now := s.Now().Format(time.RFC3339)
+	_, _ = s.db.SQL.Exec(`UPDATE peers SET last_seen_at=? WHERE role='migrate_source'`, now)
+	return nil
+}
+
+func (s *Service) stalePairing() bool {
+	var last sql.NullString
+	_ = s.db.SQL.QueryRow(`SELECT last_seen_at FROM peers WHERE role='migrate_source' ORDER BY id DESC LIMIT 1`).Scan(&last)
+	if !last.Valid || last.String == "" {
+		return false
+	}
+	t, err := time.Parse(time.RFC3339, last.String)
+	if err != nil {
+		return false
+	}
+	return s.Now().After(t.Add(s.idleFor()))
+}
+
+func (s *Service) ExpireStale() error {
+	if !s.stalePairing() {
+		return nil
+	}
+	_ = removeAuthorizedKeys(s.AuthKeys)
+	_, _ = s.db.SQL.Exec(`DELETE FROM pairing_tokens`)
 	return nil
 }
 
@@ -267,15 +318,17 @@ func (s *Service) Connect(ctx context.Context, in ConnectIn) (ConnectOut, error)
 }
 
 type Preflight struct {
-	OK      bool     `json:"ok"`
-	OS      string   `json:"os"`
-	DiskOK  bool     `json:"disk_ok"`
-	FreeB   int64    `json:"free_bytes"`
-	NeedB   int64    `json:"need_bytes"`
-	PHP     string   `json:"php"`
-	MySQL   string   `json:"mysql"`
-	Ports   string   `json:"ports"`
-	Errors  []string `json:"errors"`
+	OK        bool     `json:"ok"`
+	OS        string   `json:"os"`
+	DiskOK    bool     `json:"disk_ok"`
+	FreeB     int64    `json:"free_bytes"`
+	NeedB     int64    `json:"need_bytes"`
+	PHP       string   `json:"php"`
+	MySQL     string   `json:"mysql"`
+	Ports     string   `json:"ports"`
+	Errors    []string `json:"errors"`
+	SiteCount int      `json:"site_count"`
+	SiteKeys  []string `json:"site_keys"`
 }
 
 type PreflightIn struct {
@@ -327,6 +380,15 @@ func (s *Service) PreflightLocal(need int64) Preflight {
 	}
 	if s.Nginx != nil {
 		_ = s.Nginx.EnsureLayout()
+	}
+	if s.Sites != nil {
+		if items, err := s.Sites.List(); err == nil {
+			p.SiteCount = len(items)
+			p.SiteKeys = make([]string, 0, len(items))
+			for _, it := range items {
+				p.SiteKeys = append(p.SiteKeys, it.SiteKey)
+			}
+		}
 	}
 	p.OK = len(p.Errors) == 0
 	return p
@@ -391,13 +453,23 @@ func (s *Service) Status() (Status, error) {
 	return st, nil
 }
 
-func (s *Service) Start(ctx context.Context, mode string) (int64, error) {
+func (s *Service) Start(ctx context.Context, mode string, confirmReplace bool) (int64, error) {
 	if mode != "full" && mode != "incr" {
 		return 0, fmt.Errorf("mode 只能是 full 或 incr")
 	}
 	addr, token, fp, err := s.activePeer()
 	if err != nil {
 		return 0, err
+	}
+	pf, err := s.PreflightPeer(ctx, 1<<30)
+	if err != nil {
+		return 0, err
+	}
+	if !pf.OK {
+		return 0, fmt.Errorf("预检失败：%s", strings.Join(pf.Errors, "；"))
+	}
+	if pf.SiteCount > 0 && !confirmReplace {
+		return 0, fmt.Errorf("目标机已有 %d 个站点将被替换，请确认", pf.SiteCount)
 	}
 	var peerID int64
 	_ = s.db.SQL.QueryRow(`SELECT id FROM peers WHERE role='migrate_target' ORDER BY id DESC LIMIT 1`).Scan(&peerID)
@@ -431,82 +503,78 @@ func (s *Service) setJob(id int64, phase, detail string, progress int) {
 	_, _ = s.db.SQL.Exec(`UPDATE migrate_jobs SET phase=?, detail=?, progress=? WHERE id=?`, phase, detail, progress, id)
 }
 
-func (s *Service) finishJob(id int64, err error) {
+func (s *Service) finishJob(id int64, err error, extra string) {
 	phase, detail := "done", "完成"
 	if err != nil {
 		phase, detail = "failed", err.Error()
+	} else if extra != "" {
+		detail = extra
 	}
 	now := s.Now().Format(time.RFC3339)
 	_, _ = s.db.SQL.Exec(`UPDATE migrate_jobs SET phase=?, detail=?, progress=100, finished_at=? WHERE id=?`, phase, detail, now, id)
 }
 
 func (s *Service) runSync(ctx context.Context, jobID int64, mode, addr, token, fp string) {
-	err := s.syncOnce(ctx, jobID, mode, addr, token, fp)
-	s.finishJob(jobID, err)
+	extra, err := s.syncOnce(ctx, jobID, mode, addr, token, fp)
+	s.finishJob(jobID, err, extra)
 }
 
-func (s *Service) syncOnce(ctx context.Context, jobID int64, mode, addr, token, fp string) error {
+func (s *Service) syncOnce(ctx context.Context, jobID int64, mode, addr, token, fp string) (string, error) {
 	s.setJob(jobID, "preflight", "目标机预检", 5)
 	need := int64(1 << 30)
 	pf, err := s.PreflightPeer(ctx, need)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if !pf.OK {
-		return fmt.Errorf("预检失败：%s", strings.Join(pf.Errors, "；"))
+		return "", fmt.Errorf("预检失败：%s", strings.Join(pf.Errors, "；"))
 	}
 	sshHost, err := sshHostOf(addr)
 	if err != nil {
-		return err
+		return "", err
 	}
 	user, _ := s.peerSSH()
 	dest := func(p string) string { return user + "@" + sshHost + ":" + p }
 	s.setJob(jobID, mode, "同步站点文件", 20)
 	if err := s.rsyncPath(ctx, s.WWW+"/", dest(s.WWW+"/")); err != nil {
-		return fmt.Errorf("rsync 站点：%w", err)
+		return "", fmt.Errorf("rsync 站点：%w", err)
 	}
 	s.setJob(jobID, mode, "同步证书与密钥", 40)
-	tlsDir := filepath.Join(s.DataDir, "tls", "sites")
-	if s.SSL != nil && s.SSL.Dir != "" {
-		tlsDir = s.SSL.Dir
-	}
-	_ = s.rsyncPath(ctx, tlsDir+"/", dest(tlsDir+"/"))
 	acme := filepath.Join(s.Secrets, "acme.key")
 	_ = s.rsyncPath(ctx, acme, dest(acme))
-	if s.Nginx != nil {
-		if s.Nginx.ConfD != "" {
-			_ = s.rsyncPath(ctx, s.Nginx.ConfD+"/", dest(s.Nginx.ConfD+"/"))
-		}
-		if s.Nginx.Available != "" {
-			_ = s.rsyncPath(ctx, s.Nginx.Available+"/", dest(s.Nginx.Available+"/"))
-		}
+	if s.Nginx != nil && s.Nginx.ConfD != "" {
+		_ = s.rsyncPath(ctx, s.Nginx.ConfD+"/", dest(s.Nginx.ConfD+"/"))
 	}
 	if s.MySQL != nil && s.MySQL.CNFPath != "" {
 		_ = s.rsyncPath(ctx, s.MySQL.CNFPath, dest(s.MySQL.CNFPath))
 	}
 	s.setJob(jobID, mode, "导出数据库", 55)
-	dump := filepath.Join(s.DataDir, "tmp", "migrate-mysql.sql")
-	if s.DataDir == "" {
-		dump = "/var/lib/lnmp-panel/tmp/migrate-mysql.sql"
-	}
+	dump := s.dumpFile()
 	if err := s.dumpMySQL(ctx, dump); err != nil {
-		return err
+		return "", err
 	}
 	if _, err := os.Stat(dump); err == nil {
-		if err := s.rsyncPath(ctx, dump, dest(dump)); err != nil {
-			return fmt.Errorf("rsync 数据库导出：%w", err)
+		bDump := "/var/lib/lnmp-panel/tmp/migrate-mysql.sql"
+		if err := s.rsyncPath(ctx, dump, dest(bDump)); err != nil {
+			return "", fmt.Errorf("rsync 数据库导出：%w", err)
 		}
 	}
 	s.setJob(jobID, mode, "提交元数据", 75)
 	bundle, err := s.exportBundle(ctx)
 	if err != nil {
-		return err
+		return "", err
 	}
-	if err := s.postPeer(ctx, addr, fp, "", "/migrate/peer/apply", map[string]any{"token": token, "bundle": bundle, "dump_path": dump}, nil); err != nil {
-		return err
+	var applied ApplyOut
+	if err := s.postPeer(ctx, addr, fp, "", "/migrate/peer/apply", map[string]any{"token": token, "bundle": bundle}, &applied); err != nil {
+		return "", err
 	}
-	s.setJob(jobID, mode, "完成", 95)
-	return nil
+	_ = os.Remove(dump)
+	extra := "完成"
+	if len(applied.Missing) > 0 {
+		extra = "文件与配置已同步，目标机还需安装：" + strings.Join(applied.Missing, "、")
+	}
+	s.setJob(jobID, mode, extra, 95)
+	return extra, nil
 }
 
 func (s *Service) dumpMySQL(ctx context.Context, path string) error {
@@ -519,15 +587,16 @@ func (s *Service) dumpMySQL(ctx context.Context, path string) error {
 	if err := s.MySQL.Refuse(ctx); err != nil {
 		return err
 	}
-	if _, err := os.Stat("/usr/bin/mysqldump"); err != nil {
-		return nil
-	}
 	dbs, err := s.MySQL.ListDB()
 	if err != nil {
 		return err
 	}
 	if len(dbs) == 0 {
 		return nil
+	}
+	names := make([]string, 0, len(dbs))
+	for _, d := range dbs {
+		names = append(names, d.Name)
 	}
 	if err := panelFS.Mkdir(filepath.Dir(path), 0700); err != nil {
 		return err
@@ -537,15 +606,24 @@ func (s *Service) dumpMySQL(ctx context.Context, path string) error {
 		return err
 	}
 	defer f.Close()
-	args := []string{"/usr/bin/mysqldump", "--single-transaction", "--routines", "--events", "--all-databases"}
-	if s.MySQL.Defaults != "" {
-		if _, err := os.Stat(s.MySQL.Defaults); err == nil {
-			args = []string{"/usr/bin/mysqldump", "--defaults-extra-file=" + s.MySQL.Defaults, "--single-transaction", "--routines", "--events", "--all-databases"}
+	if err := s.MySQL.DumpDatabasesTo(ctx, names, f); err != nil {
+		return err
+	}
+	users, _ := s.MySQL.ListUsers()
+	for _, u := range users {
+		if mysql.IsReservedUser(u.User) {
+			continue
+		}
+		sqlu, err := s.MySQL.UserDumpSQL(ctx, u.User, u.Host)
+		if err != nil {
+			return err
+		}
+		if _, err := f.WriteString(sqlu); err != nil {
+			return err
 		}
 	}
-	r, err := exec.RunTo(ctx, 30*time.Minute, nil, f, args...)
-	if err != nil {
-		return fmt.Errorf("mysqldump：%s", exec.Clip(r.Stderr))
+	if _, err := f.WriteString("FLUSH PRIVILEGES;\n"); err != nil {
+		return err
 	}
 	_ = f.Chmod(0600)
 	return nil
@@ -636,29 +714,48 @@ type ApplyIn struct {
 	DumpPath string `json:"dump_path"`
 }
 
-func (s *Service) PeerApply(ctx context.Context, in ApplyIn) error {
+type ApplyOut struct {
+	Missing []string `json:"missing"`
+}
+
+func (s *Service) PeerApply(ctx context.Context, in ApplyIn) (ApplyOut, error) {
+	var out ApplyOut
 	if err := s.validPeerToken(in.Token); err != nil {
-		return err
+		return out, err
 	}
-	if err := s.applyBundle(ctx, in.Bundle); err != nil {
-		return err
+	missing, err := s.applyBundle(ctx, in.Bundle)
+	if err != nil {
+		return out, err
 	}
-	if in.DumpPath != "" && s.MySQL != nil && !s.SkipExec {
-		b, err := os.ReadFile(in.DumpPath)
-		if err == nil && len(b) > 0 {
-			run := s.IORunner
-			if run == nil {
-				run = exec.RunIO
-			}
-			args := []string{"/usr/bin/mysql", "-uroot"}
-			if s.MySQL.Defaults != "" {
-				if _, err := os.Stat(s.MySQL.Defaults); err == nil {
-					args = []string{"/usr/bin/mysql", "--defaults-extra-file=" + s.MySQL.Defaults}
-				}
-			}
-			_, _ = run(ctx, 10*time.Minute, bytes.NewReader(b), args...)
+	out.Missing = missing
+	if err := s.importLocalDump(ctx); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+func (s *Service) importLocalDump(ctx context.Context) error {
+	path := s.dumpFile()
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
 		}
+		return err
 	}
+	defer f.Close()
+	if s.SkipExec {
+		_ = os.Remove(path)
+		return nil
+	}
+	if s.MySQL == nil || !s.MySQL.Installed() {
+		return fmt.Errorf("目标机未安装 MySQL，无法导入")
+	}
+	if err := s.MySQL.ImportFrom(ctx, f); err != nil {
+		return err
+	}
+	_ = f.Close()
+	_ = os.Remove(path)
 	return nil
 }
 
@@ -758,7 +855,7 @@ func (s *Service) postPeer(ctx context.Context, address, fpFull, fpPrefix, path 
 
 func (s *Service) peerHTTP(fpFull, fpPrefix string) *http.Client {
 	return &http.Client{
-		Timeout: 2 * time.Minute,
+		Timeout: 5 * time.Minute,
 		Transport: &http.Transport{
 			TLSClientConfig: tlsConfig(fpFull, fpPrefix),
 		},

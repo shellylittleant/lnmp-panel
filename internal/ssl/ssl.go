@@ -148,6 +148,10 @@ func (s *Service) Issue(ctx context.Context, siteID int64) error {
 	return s.sites.ApplyConf(ctx, siteID)
 }
 
+func LeafNotAfter(certPEM []byte) (time.Time, error) {
+	return leafNotAfter(certPEM)
+}
+
 func leafNotAfter(certPEM []byte) (time.Time, error) {
 	block, _ := pem.Decode(certPEM)
 	if block == nil {

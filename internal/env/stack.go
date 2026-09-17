@@ -154,6 +154,10 @@ func (s *StackInstaller) runMySQL(ctx context.Context, id string) {
 	}
 	s.Jobs.Update(id, "mysql-bootstrap", "创建面板账号并写入片段", 90)
 	if s.MySQL != nil {
+		if err := s.MySQL.EnsureRunning(ctx); err != nil {
+			s.Jobs.Finish(id, err)
+			return
+		}
 		if err := s.MySQL.EnsurePanelUser(ctx); err != nil {
 			s.Jobs.Finish(id, err)
 			return

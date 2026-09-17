@@ -331,6 +331,45 @@ func TestParseSSHPortsAndListening(t *testing.T) {
 	}
 }
 
+func TestStageMigratedRewritesLocalPorts(t *testing.T) {
+	s := setupFW(t)
+	s.PanelPort = 28443
+	_ = s.Settings.Set("listen_port", "28443")
+	sshCfg := filepath.Join(t.TempDir(), "sshd_config")
+	if err := os.WriteFile(sshCfg, []byte("Port 2222\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	s.SSHConfigPaths = []string{sshCfg}
+	if err := os.WriteFile(s.Canonical, []byte(Placeholder+"# local-only\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	in := Form{SSHPort: 22, PanelPort: 18443, InputPolicy: "drop", PublicHTTP: true, OpenPorts: []int{8080}}
+	if err := s.StageMigrated(in); err != nil {
+		t.Fatal(err)
+	}
+	can, _ := os.ReadFile(s.Canonical)
+	if strings.Contains(string(can), "18443") {
+		t.Fatalf("开机文件不得含 A 的面板端口：%s", can)
+	}
+	if strings.Contains(string(can), "tcp dport 22") && strings.Contains(string(can), "comment \"ssh\"") {
+		t.Fatalf("开机文件不得被改成 A 的 SSH：%s", can)
+	}
+	draft := s.draftBody()
+	if strings.Contains(draft, "18443") {
+		t.Fatalf("草稿不得含 A 端口：%s", draft)
+	}
+	if !strings.Contains(draft, "28443") {
+		t.Fatalf("草稿应含 B 面板端口：%s", draft)
+	}
+	if !strings.Contains(draft, "2222") {
+		t.Fatalf("草稿应含 B 的 SSH：%s", draft)
+	}
+	v, err := s.Get()
+	if err != nil || !v.MigratePending {
+		t.Fatalf("应标记迁移待应用 %+v %v", v, err)
+	}
+}
+
 func TestWithFlush(t *testing.T) {
 	out := withFlush("table inet x {\n}\n")
 	if !strings.HasPrefix(out, "flush ruleset\n") {

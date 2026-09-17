@@ -57,13 +57,14 @@ func (s *Server) handleMigrateStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Mode string `json:"mode"`
+		Mode           string `json:"mode"`
+		ConfirmReplace bool   `json:"confirm_replace"`
 	}
 	if err := readJSON(w, r, &in); err != nil {
 		writeErr(w, 400, "invalid", "请求格式错误")
 		return
 	}
-	id, err := s.Migrate.Start(r.Context(), in.Mode)
+	id, err := s.Migrate.Start(r.Context(), in.Mode, in.ConfirmReplace)
 	if err != nil {
 		writeErr(w, 409, "conflict", err.Error())
 		return
@@ -106,6 +107,7 @@ func (s *Server) handleMigrateAccept(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "invalid", "请求格式错误")
 		return
 	}
+	in.From = clientIP(r)
 	out, err := s.Migrate.Accept(in)
 	if err != nil {
 		writeErr(w, 400, "invalid", err.Error())
@@ -141,20 +143,21 @@ func (s *Server) handleMigratePeerApply(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var in struct {
-		Token    string          `json:"token"`
-		Bundle   migrate.Bundle  `json:"bundle"`
-		DumpPath string          `json:"dump_path"`
+		Token    string         `json:"token"`
+		Bundle   migrate.Bundle `json:"bundle"`
+		DumpPath string         `json:"dump_path"`
 	}
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<20))
 	if err := dec.Decode(&in); err != nil {
 		writeErr(w, 400, "invalid", "请求格式错误")
 		return
 	}
-	if err := s.Migrate.PeerApply(r.Context(), migrate.ApplyIn{Token: in.Token, Bundle: in.Bundle, DumpPath: in.DumpPath}); err != nil {
+	out, err := s.Migrate.PeerApply(r.Context(), migrate.ApplyIn{Token: in.Token, Bundle: in.Bundle})
+	if err != nil {
 		writeErr(w, 400, "invalid", err.Error())
 		return
 	}
-	writeOK(w, map[string]any{})
+	writeOK(w, out)
 }
 
 func (s *Server) handleMigratePeerCancel(w http.ResponseWriter, r *http.Request) {

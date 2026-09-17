@@ -272,6 +272,47 @@ func TestCNFFormVsRaw(t *testing.T) {
 	}
 }
 
+func TestDumpManagedArgsNoAllDatabases(t *testing.T) {
+	args := DumpManagedArgs("/tmp/panel.cnf", []string{"blog", "shop"})
+	joined := strings.Join(args, " ")
+	if strings.Contains(joined, "--all-databases") {
+		t.Fatal(joined)
+	}
+	if !strings.Contains(joined, "--databases") || !strings.Contains(joined, "blog") {
+		t.Fatal(joined)
+	}
+	if args[0] != "/usr/bin/mysqldump" {
+		t.Fatal(args)
+	}
+}
+
+func TestReservedUserDumpEmpty(t *testing.T) {
+	s := setupMySQL(t)
+	for _, u := range []string{"root", "lnmp_panel", "debian-sys-maint", "mysql.sys"} {
+		if !IsReservedUser(u) {
+			t.Fatalf("%s 应排除", u)
+		}
+		sqlu, err := s.UserDumpSQL(context.Background(), u, "localhost")
+		if err != nil || sqlu != "" {
+			t.Fatalf("%s dump %q %v", u, sqlu, err)
+		}
+	}
+	if got := extractCreateUser("u@localhost\tCREATE USER 'u'@'localhost' IDENTIFIED BY 'x'"); !strings.HasPrefix(got, "CREATE USER") || !strings.HasSuffix(got, ";") {
+		t.Fatal(got)
+	}
+	if got := extractCreateUser("CREATE USER 'u'@'localhost' IDENTIFIED BY 'x'"); !strings.Contains(got, "CREATE USER") {
+		t.Fatal(got)
+	}
+	s.IORunner = func(ctx context.Context, d time.Duration, stdin io.Reader, argv ...string) (exec.Result, error) {
+		return exec.Result{Stdout: "CREATE USER 'blogu'@'localhost' IDENTIFIED BY 'x'"}, nil
+	}
+	s.SkipExec = false
+	sqlu, err := s.UserDumpSQL(context.Background(), "blogu", "localhost")
+	if err != nil || !strings.Contains(sqlu, "CREATE USER IF NOT EXISTS") {
+		t.Fatalf("应生成 IF NOT EXISTS：%q %v", sqlu, err)
+	}
+}
+
 func TestMariaDBRefuse(t *testing.T) {
 	s := setupMySQL(t)
 	if err := s.Refuse(context.Background()); err != nil {

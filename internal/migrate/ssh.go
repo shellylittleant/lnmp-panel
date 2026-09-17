@@ -16,7 +16,19 @@ const (
 	authEnd   = "# LNMP-PANEL-MIGRATE-END"
 )
 
-func upsertAuthorizedKeys(path, pub string) error {
+func restrictOpts() string {
+	return "no-pty,no-agent-forwarding,no-port-forwarding,no-X11-forwarding"
+}
+
+func authKeyLine(pub, fromIP string) string {
+	opts := restrictOpts()
+	if ip := net.ParseIP(strings.TrimSpace(fromIP)); ip != nil {
+		return fmt.Sprintf("from=%q,%s %s", ip.String(), opts, pub)
+	}
+	return opts + " " + pub
+}
+
+func upsertAuthorizedKeys(path, pub, fromIP string) error {
 	pub = strings.TrimSpace(pub)
 	if pub == "" {
 		return fmt.Errorf("空公钥")
@@ -35,7 +47,7 @@ func upsertAuthorizedKeys(path, pub string) error {
 		b.WriteByte('\n')
 	}
 	b.WriteString(authBegin + "\n")
-	b.WriteString(pub + "\n")
+	b.WriteString(authKeyLine(pub, fromIP) + "\n")
 	b.WriteString(authEnd + "\n")
 	if err := panelFS.Mkdir(filepath.Dir(path), 0700); err != nil {
 		return err

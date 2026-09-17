@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from "vue";
-import { NAlert, NButton, NCard, NForm, NFormItem, NInput, NSpace, useMessage } from "naive-ui";
+import { NAlert, NButton, NCard, NCheckbox, NForm, NFormItem, NInput, NSpace, useMessage } from "naive-ui";
 import { api } from "../api";
 
 const msg = useMessage();
@@ -11,6 +11,7 @@ const peerToken = ref("");
 const status = ref<any>(null);
 const pre = ref<any>(null);
 const busy = ref("");
+const confirmReplace = ref(false);
 let timer: number | undefined;
 
 async function loadStatus() {
@@ -63,7 +64,7 @@ async function preflight() {
 async function start(mode: string) {
   busy.value = mode === "full" ? "全量同步" : "增量同步";
   try {
-    const r = await api("POST", "/migrate/start", { mode });
+    const r = await api("POST", "/migrate/start", { mode, confirm_replace: confirmReplace.value });
     if (!r.ok) {
       msg.error(r.error.message);
       return;
@@ -118,11 +119,14 @@ onUnmounted(() => {
           <n-button type="primary" :disabled="!!busy" @click="start('full')">全量同步</n-button>
           <n-button :disabled="!!busy" @click="start('incr')">增量同步</n-button>
           <n-button type="warning" :disabled="!!busy" @click="cancel">取消并作废钥</n-button>
+          <n-button :disabled="!!busy" @click="cancel">完成迁移</n-button>
           <span v-if="busy">{{ busy }}…</span>
         </n-space>
       </n-form>
       <n-alert v-if="pre" :type="pre.ok ? 'success' : 'error'" title="预检" style="margin-top: 12px">
         <p>系统 {{ pre.os }}　磁盘 {{ pre.disk_ok ? "足够" : "不足" }}　{{ pre.php }}　{{ pre.mysql }}</p>
+        <p v-if="pre.site_count > 0">目标机已有 {{ pre.site_count }} 个站点将被替换：{{ (pre.site_keys || []).join("、") }}</p>
+        <n-checkbox v-if="pre.site_count > 0" v-model:checked="confirmReplace">确认替换目标机已有站点</n-checkbox>
         <p v-for="(e, i) in pre.errors || []" :key="i">{{ e }}</p>
       </n-alert>
     </n-card>

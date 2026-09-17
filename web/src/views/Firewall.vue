@@ -14,6 +14,7 @@ const content = ref("");
 const drifted = ref(false);
 const rawMode = ref(false);
 const pending = ref(false);
+const migratePending = ref(false);
 const deadline = ref<string | null>(null);
 const force = ref(false);
 const remain = ref("");
@@ -36,6 +37,7 @@ async function load() {
   drifted.value = d.drifted;
   rawMode.value = d.raw_mode;
   pending.value = d.pending;
+  migratePending.value = d.migrate_pending;
   deadline.value = d.confirm_deadline || null;
 }
 
@@ -139,6 +141,9 @@ async function useTpl() {
 
 <template>
   <n-space vertical>
+    <n-alert v-if="migratePending" type="info" title="迁移带来的待应用规则">
+      已按本机 SSH 与面板端口重写，尚未写入开机规则。请核对后点「应用」，走正常确认窗口。
+    </n-alert>
     <n-alert v-if="pending" type="warning" :title="remain || '确认窗口'">
       新规则已加载。若 SSH 或面板中断，到期会自动回滚。请立即确认或手动回滚。
       <n-space style="margin-top: 8px">
