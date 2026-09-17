@@ -29,6 +29,7 @@ import (
 	"lnmp-panel/internal/firewall"
 	"lnmp-panel/internal/jobs"
 	"lnmp-panel/internal/logview"
+	"lnmp-panel/internal/migrate"
 	"lnmp-panel/internal/monitor"
 	"lnmp-panel/internal/mysql"
 	"lnmp-panel/internal/nginx"
@@ -127,6 +128,18 @@ func startTest(t *testing.T) (base, prefix, password string, client *http.Client
 	sch := scheduler.New()
 	sch.Register("ssl.renew", 24*time.Hour, func(context.Context) error { return nil })
 	sch.Register("metrics.sample", 15*time.Second, func(context.Context) error { return nil })
+	tlsCerts := mustCert(t, dir)
+	mig := migrate.New(db)
+	mig.TLSCert = filepath.Join(dir, "t.crt")
+	mig.Settings = st
+	mig.SkipExec = true
+	mig.Secrets = filepath.Join(dir, "sec")
+	mig.AuthKeys = filepath.Join(dir, "ak")
+	mig.HostKeyPub = filepath.Join(dir, "host.pub")
+	_ = os.WriteFile(mig.HostKeyPub, []byte("ssh-ed25519 AAAA host"), 0644)
+	mig.Sites, mig.Nginx, mig.Tpl, mig.SSL = sites, ngx, tpl, sslSvc
+	mig.WWW = sites.WWW
+	mig.DataDir = dir
 	prefix = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	s := &Server{
 		Prefix:    prefix,
@@ -150,10 +163,11 @@ func startTest(t *testing.T) (base, prefix, password string, client *http.Client
 		Monitor:   mon,
 		Cron:      cronSvc,
 		Scheduler: sch,
+		Migrate:   mig,
 	}
 	https := &http.Server{Handler: s.Handler()}
 	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
-		Certificates: mustCert(t, dir),
+		Certificates: tlsCerts,
 		MinVersion:   tls.VersionTLS12,
 	})
 	if err != nil {
@@ -625,6 +639,28 @@ func TestStage5LogsMetricsCron(t *testing.T) {
 	_ = json.Unmarshal(e.Data, &envv)
 	if envv["mysql_source"] != "official" && envv["mysql_source"] != "ubuntu" {
 		t.Fatalf("mysql_source %+v", envv)
+	}
+}
+
+func TestMigrateTokenAPI(t *testing.T) {
+	base, prefix, pass, client, _ := startTest(t)
+	api := base + "/" + prefix + "/api/v1"
+	csrf := loginCSRF(t, client, api, "admin", pass)
+	code, e := doJSON(t, client, "POST", api+"/migrate/token", csrf, map[string]any{})
+	if code != 200 || !e.OK {
+		t.Fatalf("token %d %+v", code, e)
+	}
+	var tok map[string]any
+	_ = json.Unmarshal(e.Data, &tok)
+	raw, _ := tok["token"].(string)
+	if !strings.Contains(raw, ".") {
+		t.Fatalf("令牌格式 %s", raw)
+	}
+	code, e = doJSON(t, client, "POST", api+"/migrate/connect", csrf, map[string]any{
+		"address": "https://127.0.0.1:1/nope", "token": "ffffffffffffffff." + "aabbccddeeff0011",
+	})
+	if code == 200 && e.OK {
+		t.Fatal("错误指纹应失败")
 	}
 }
 

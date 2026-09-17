@@ -11,17 +11,23 @@ server {
         return 301 https://$host$request_uri;
     }
 {{else}}    root {{.Root}};
-    index index.php index.html;
+{{if .PHPSocket}}    index index.php;
+{{else}}    index index.php index.html;
+{{end}}
 {{if .AccessAllow}}{{range .AccessAllow}}    allow {{.}};
 {{end}}    deny all;
 {{end}}{{if .BasicAuthFile}}    auth_basic "restricted";
     auth_basic_user_file {{.BasicAuthFile}};
 {{end}}{{range .Redirects}}    location = {{.FromPath}} { return {{.Code}} {{.ToURL}}; }
+{{end}}{{if .PHPSocket}}    location = / {
+        rewrite ^ /index.php last;
+    }
 {{end}}{{if .Rewrite}}
 {{indent 4 .Rewrite}}
 {{else}}    location / {
-        try_files $uri $uri/ {{if .PHPSocket}}/index.php?$query_string{{else}}=404{{end}};
-    }
+{{if .PHPSocket}}        try_files $uri /index.php?$query_string;
+{{else}}        try_files $uri $uri/ =404;
+{{end}}    }
 {{end}}{{if .PHPSocket}}    location ~ \.php$ {
         include snippets/fastcgi-php.conf;
         fastcgi_pass unix:{{.PHPSocket}};
@@ -36,7 +42,9 @@ server {
     listen 443 ssl{{if .HTTP2}} http2{{end}};
     server_name {{join .Domains " "}};
     root {{.Root}};
-    index index.php index.html;
+{{if .PHPSocket}}    index index.php;
+{{else}}    index index.php index.html;
+{{end}}
     access_log /var/log/nginx/{{.SiteKey}}.access.log lnmp_panel;
     error_log /var/log/nginx/{{.SiteKey}}.error.log;
 {{indent 4 .SSLSnippet}}
@@ -45,11 +53,15 @@ server {
 {{end}}{{if .BasicAuthFile}}    auth_basic "restricted";
     auth_basic_user_file {{.BasicAuthFile}};
 {{end}}{{range .Redirects}}    location = {{.FromPath}} { return {{.Code}} {{.ToURL}}; }
+{{end}}{{if .PHPSocket}}    location = / {
+        rewrite ^ /index.php last;
+    }
 {{end}}{{if .Rewrite}}
 {{indent 4 .Rewrite}}
 {{else}}    location / {
-        try_files $uri $uri/ {{if .PHPSocket}}/index.php?$query_string{{else}}=404{{end}};
-    }
+{{if .PHPSocket}}        try_files $uri /index.php?$query_string;
+{{else}}        try_files $uri $uri/ =404;
+{{end}}    }
 {{end}}{{if .PHPSocket}}    location ~ \.php$ {
         include snippets/fastcgi-php.conf;
         fastcgi_pass unix:{{.PHPSocket}};

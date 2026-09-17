@@ -144,6 +144,7 @@ func (s *Service) TestAndReload(ctx context.Context) error {
 	if SystemdLive() {
 		r, err = run(ctx, 15*time.Second, "/usr/bin/systemctl", "reload", "nginx")
 		if err == nil {
+			time.Sleep(300 * time.Millisecond)
 			return nil
 		}
 		r2, err2 := run(ctx, 15*time.Second, "/usr/bin/systemctl", "start", "nginx")
@@ -154,6 +155,7 @@ func (s *Service) TestAndReload(ctx context.Context) error {
 	}
 	r, err = run(ctx, 10*time.Second, s.Bin, "-s", "reload")
 	if err == nil {
+		time.Sleep(300 * time.Millisecond)
 		return nil
 	}
 	r2, err2 := run(ctx, 10*time.Second, s.Bin)

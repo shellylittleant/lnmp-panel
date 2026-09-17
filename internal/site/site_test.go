@@ -119,6 +119,46 @@ func TestPHPSiteRendersSocket(t *testing.T) {
 	if !strings.Contains(body, "php8.3-fpm.sock") {
 		t.Fatalf("应含 php socket：%s", body)
 	}
+	if !strings.Contains(body, "try_files $uri /index.php") {
+		t.Fatalf("PHP 站点 / 应优先 index.php，不得用目录索引抢走 html：%s", body)
+	}
+	if strings.Contains(body, "try_files $uri $uri/") {
+		t.Fatal("PHP location / 不应再 try_files $uri/")
+	}
+	if !strings.Contains(body, "location = /") || !strings.Contains(body, "rewrite ^ /index.php last") {
+		t.Fatalf("GET / 必须 rewrite 到 index.php：%s", body)
+	}
+	if strings.Contains(body, "index index.php index.html") {
+		t.Fatal("绑 PHP 后 index 不得再列出 index.html")
+	}
+}
+
+func TestSwitchToPHPSwitchesOfficialTemplate(t *testing.T) {
+	s := setup(t)
+	st, err := s.Create(context.Background(), In{SiteKey: "blog", Domains: []string{"blog.test"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := s.ngx.Read(st.SiteKey)
+	if !strings.Contains(body, "index index.html") {
+		t.Fatalf("静态默认：%s", body)
+	}
+	ver := "8.3"
+	got, err := s.Update(context.Background(), st.ID, In{PHPVersion: &ver, Force: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, err := s.tpl.Get(*got.NginxTemplateID)
+	if err != nil || rec.Name != "PHP 站点" {
+		t.Fatalf("切 PHP 应换官方 PHP 站点模板，得到 %+v %v", rec, err)
+	}
+	body, _ = s.ngx.Read(st.SiteKey)
+	if !strings.Contains(body, "try_files $uri /index.php") || !strings.Contains(body, "index.php") {
+		t.Fatalf("切 PHP 后 conf 应优先 index.php：%s", body)
+	}
+	if !strings.Contains(body, "rewrite ^ /index.php last") {
+		t.Fatalf("切 PHP 后 / 应 rewrite 到 index.php：%s", body)
+	}
 }
 
 func TestInjectRejectedNoResidue(t *testing.T) {

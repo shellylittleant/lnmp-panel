@@ -87,6 +87,24 @@ func TestStage5Tables(t *testing.T) {
 	}
 }
 
+func TestStage6Tables(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(filepath.Join(dir, "panel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.SQL.Exec(`INSERT INTO pairing_tokens(token_hash, expires_at) VALUES ('h','t')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL.Exec(`INSERT INTO peers(address, role, fingerprint) VALUES ('https://b/x','migrate_target','fp')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL.Exec(`INSERT INTO migrate_jobs(peer_id, mode, phase, detail, started_at) VALUES (1,'full','handshake','','t')`); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestJobsTable(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(filepath.Join(dir, "panel.db"))

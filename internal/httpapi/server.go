@@ -14,6 +14,7 @@ import (
 	"lnmp-panel/internal/firewall"
 	"lnmp-panel/internal/jobs"
 	"lnmp-panel/internal/logview"
+	"lnmp-panel/internal/migrate"
 	"lnmp-panel/internal/monitor"
 	"lnmp-panel/internal/mysql"
 	"lnmp-panel/internal/nginx"
@@ -51,6 +52,7 @@ type Server struct {
 	Monitor   *monitor.Service
 	Cron      *cron.Service
 	Scheduler *scheduler.Scheduler
+	Migrate   *migrate.Service
 }
 
 func (s *Server) Handler() http.Handler {
@@ -125,6 +127,16 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("DELETE /api/v1/cron/{id}", s.requireAuth(s.handleCronDelete))
 	api.HandleFunc("POST /api/v1/cron/{id}/run", s.requireAuth(s.handleCronRun))
 	api.HandleFunc("GET /api/v1/scheduler", s.requireAuth(s.handleScheduler))
+	api.HandleFunc("POST /api/v1/migrate/token", s.requireAuth(s.handleMigrateToken))
+	api.HandleFunc("POST /api/v1/migrate/connect", s.requireAuth(s.handleMigrateConnect))
+	api.HandleFunc("POST /api/v1/migrate/preflight", s.requireAuth(s.handleMigratePreflight))
+	api.HandleFunc("POST /api/v1/migrate/start", s.requireAuth(s.handleMigrateStart))
+	api.HandleFunc("GET /api/v1/migrate/status", s.requireAuth(s.handleMigrateStatus))
+	api.HandleFunc("POST /api/v1/migrate/cancel", s.requireAuth(s.handleMigrateCancel))
+	api.HandleFunc("POST /api/v1/migrate/accept", s.handleMigrateAccept)
+	api.HandleFunc("POST /api/v1/migrate/peer/preflight", s.handleMigratePeerPreflight)
+	api.HandleFunc("POST /api/v1/migrate/peer/apply", s.handleMigratePeerApply)
+	api.HandleFunc("POST /api/v1/migrate/peer/cancel", s.handleMigratePeerCancel)
 	api.HandleFunc("GET /api/v1/templates", s.requireAuth(s.handleTemplates))
 	api.HandleFunc("POST /api/v1/templates", s.requireAuth(s.handleTemplateCreate))
 	api.HandleFunc("GET /api/v1/templates/{id}", s.requireAuth(s.handleTemplateGet))
@@ -194,6 +206,10 @@ func (s *Server) withSecurity(next http.Handler) http.Handler {
 		w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'")
 		r.Header.Set("X-Request-Id", newID(8))
+		if strings.HasPrefix(r.URL.Path, "/api/v1/migrate/accept") || strings.HasPrefix(r.URL.Path, "/api/v1/migrate/peer/") {
+			next.ServeHTTP(w, r)
+			return
+		}
 		ip := clientIP(r)
 		ok, err := s.Settings.IPAllowed(ip)
 		if err != nil {

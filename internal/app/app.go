@@ -24,6 +24,7 @@ import (
 	"lnmp-panel/internal/httpapi"
 	"lnmp-panel/internal/jobs"
 	"lnmp-panel/internal/logview"
+	"lnmp-panel/internal/migrate"
 	"lnmp-panel/internal/monitor"
 	"lnmp-panel/internal/mysql"
 	"lnmp-panel/internal/nginx"
@@ -36,7 +37,7 @@ import (
 	"lnmp-panel/internal/template"
 )
 
-const Version = "0.1.0-stage5"
+const Version = "0.1.0-stage6"
 
 func CLI(args []string) error {
 	if len(args) == 0 {
@@ -222,6 +223,15 @@ func Run(cfgPath string, skipOS bool) error {
 	sch.Register("login_attempts.purge", 24*time.Hour, func(ctx context.Context) error { return authSvc.PurgeAttempts() })
 	go sch.Run(ctx)
 
+	mig := migrate.New(db)
+	mig.Sites, mig.Nginx, mig.PHP, mig.MySQL = sites, ngx, phpSvc, mysqlSvc
+	mig.SSL, mig.Tpl, mig.Firewall, mig.Settings = sslSvc, tpl, fw, setSvc
+	mig.OS, mig.TLSCert, mig.DataDir = osInfo, cfg.TLSCert, cfg.DataDir
+	mig.WWW, mig.Secrets = sites.WWW, filepath.Join(cfg.DataDir, "secrets")
+	if skipOS {
+		mig.SkipExec = true
+	}
+
 	srv := &httpapi.Server{
 		Prefix:    cfg.PathPrefix,
 		Auth:      authSvc,
@@ -244,6 +254,7 @@ func Run(cfgPath string, skipOS bool) error {
 		Monitor:   mon,
 		Cron:      cronSvc,
 		Scheduler: sch,
+		Migrate:   mig,
 	}
 	baseCtx, baseCancel := context.WithCancel(context.Background())
 	defer baseCancel()

@@ -14,6 +14,7 @@ import MySQL from "./views/MySQL.vue";
 import Firewall from "./views/Firewall.vue";
 import Logs from "./views/Logs.vue";
 import Cron from "./views/Cron.vue";
+import Migrate from "./views/Migrate.vue";
 
 export const router = createRouter({
   history: createWebHistory(panelPrefix() + "/"),
@@ -34,7 +35,7 @@ export const router = createRouter({
         { path: "firewall", component: Firewall },
         { path: "logs", component: Logs },
         { path: "cron", component: Cron },
-        { path: "migrate", component: Placeholder, props: { title: "迁移" } },
+        { path: "migrate", component: Migrate },
         { path: "ha", component: Placeholder, props: { title: "热备" } },
         { path: "plugins", component: Placeholder, props: { title: "插件" } },
       ],

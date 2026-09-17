@@ -310,6 +310,7 @@ func (s *Service) Update(ctx context.Context, id int64, in In) (Site, error) {
 	if in.NginxTemplateID != nil {
 		nid = in.NginxTemplateID
 	}
+	nid = s.autoPHPTemplate(nid, php)
 	if in.RewriteTemplateID != nil {
 		rid = in.RewriteTemplateID
 	}
@@ -649,6 +650,31 @@ func (s *Service) prepare(in In) (Site, error) {
 		Enabled: true, HTTP2: h2, HTTP3: h3, ProxyPass: pp, AccessAllow: nz(in.AccessAllow),
 		Hotlink: nz(in.Hotlink), BasicAuthFile: ba,
 	}, nil
+}
+
+func (s *Service) autoPHPTemplate(nid *int64, php *string) *int64 {
+	if nid == nil {
+		return nid
+	}
+	rec, err := s.tpl.Get(*nid)
+	if err != nil || rec.Origin != "official" {
+		return nid
+	}
+	want := "静态站点"
+	if php != nil && *php != "" {
+		want = "PHP 站点"
+	}
+	if rec.Name == want {
+		return nid
+	}
+	if rec.Name != "静态站点" && rec.Name != "PHP 站点" {
+		return nid
+	}
+	nr, err := s.tpl.OfficialByName("nginx_site", want)
+	if err != nil {
+		return nid
+	}
+	return &nr.ID
 }
 
 func (s *Service) defaultTpls(in In) (*int64, *int64, *int64, error) {

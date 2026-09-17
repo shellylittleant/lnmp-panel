@@ -1,0 +1,127 @@
+package migrate
+
+import (
+	"bufio"
+	"fmt"
+	"net"
+	"os"
+	"path/filepath"
+	"strings"
+
+	panelFS "lnmp-panel/internal/fs"
+)
+
+const (
+	authBegin = "# LNMP-PANEL-MIGRATE-BEGIN"
+	authEnd   = "# LNMP-PANEL-MIGRATE-END"
+)
+
+func upsertAuthorizedKeys(path, pub string) error {
+	pub = strings.TrimSpace(pub)
+	if pub == "" {
+		return fmt.Errorf("空公钥")
+	}
+	if strings.ContainsAny(pub, "\n\r") {
+		return fmt.Errorf("公钥含换行")
+	}
+	existing := ""
+	if b, err := os.ReadFile(path); err == nil {
+		existing = string(b)
+	}
+	outside := stripAuthBlock(existing)
+	var b strings.Builder
+	b.WriteString(outside)
+	if outside != "" && !strings.HasSuffix(outside, "\n") {
+		b.WriteByte('\n')
+	}
+	b.WriteString(authBegin + "\n")
+	b.WriteString(pub + "\n")
+	b.WriteString(authEnd + "\n")
+	if err := panelFS.Mkdir(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	return panelFS.WriteAtomic(path, []byte(b.String()), 0600)
+}
+
+func removeAuthorizedKeys(path string) error {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	out := stripAuthBlock(string(b))
+	if strings.TrimSpace(out) == "" {
+		return os.Remove(path)
+	}
+	if !strings.HasSuffix(out, "\n") {
+		out += "\n"
+	}
+	return panelFS.WriteAtomic(path, []byte(out), 0600)
+}
+
+func stripAuthBlock(s string) string {
+	var out []string
+	in := false
+	sc := bufio.NewScanner(strings.NewReader(s))
+	for sc.Scan() {
+		ln := sc.Text()
+		if strings.TrimSpace(ln) == authBegin {
+			in = true
+			continue
+		}
+		if strings.TrimSpace(ln) == authEnd {
+			in = false
+			continue
+		}
+		if !in {
+			out = append(out, ln)
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+func writeKnownHosts(path, sshHost string, sshPort int, hostKeyLine string) error {
+	hostKeyLine = strings.TrimSpace(hostKeyLine)
+	if hostKeyLine == "" {
+		return fmt.Errorf("空主机钥")
+	}
+	if strings.ContainsAny(hostKeyLine, "\n\r") {
+		return fmt.Errorf("主机钥含换行")
+	}
+	sshHost = strings.TrimSpace(sshHost)
+	if sshHost == "" {
+		return fmt.Errorf("空 SSH 主机")
+	}
+	if sshPort <= 0 {
+		sshPort = 22
+	}
+	if err := panelFS.Mkdir(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	var b strings.Builder
+	b.WriteString(sshHost + " " + hostKeyLine + "\n")
+	b.WriteString(fmt.Sprintf("[%s]:%d %s\n", sshHost, sshPort, hostKeyLine))
+	return panelFS.WriteAtomic(path, []byte(b.String()), 0600)
+}
+
+func sshHostOf(address string) (string, error) {
+	hp, _, err := SplitHostPortFromAddr(address)
+	if err != nil {
+		return "", err
+	}
+	host, _, err := net.SplitHostPort(hp)
+	if err != nil {
+		return hp, nil
+	}
+	return host, nil
+}
+
+func readHostKeyPub(path string) (string, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(b)), nil
+}
