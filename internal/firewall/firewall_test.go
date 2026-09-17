@@ -284,6 +284,29 @@ func TestICMPInOfficialTemplates(t *testing.T) {
 	}
 }
 
+func TestApplyHAStandbyTemplate(t *testing.T) {
+	s := setupFW(t)
+	if err := s.ApplyHA(context.Background(), "standby", "10.8.0.2"); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(s.Canonical)
+	body := string(b)
+	if !strings.Contains(body, "panel-peer") {
+		t.Fatalf("备机应放行对端面板：%s", body)
+	}
+	if !strings.Contains(body, "10.8.0.2") {
+		t.Fatalf("应含备机对端 IP：%s", body)
+	}
+	if err := s.ApplyHA(context.Background(), "master", "10.8.0.3"); err != nil {
+		t.Fatal(err)
+	}
+	b, _ = os.ReadFile(s.Canonical)
+	body = string(b)
+	if !strings.Contains(body, "mysql-repl") || !strings.Contains(body, "10.8.0.3") {
+		t.Fatalf("主机应放行 3306 给备机：%s", body)
+	}
+}
+
 func TestPublicHTTPDefaultTrue(t *testing.T) {
 	s := setupFW(t)
 	if err := s.UseTemplate(context.Background()); err != nil {

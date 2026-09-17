@@ -40,11 +40,12 @@ type Issuer interface {
 }
 
 type Service struct {
-	db      *store.DB
-	sites   *site.Service
-	Dir     string
-	AcmeWWW string
-	Issuer  Issuer
+	db         *store.DB
+	sites      *site.Service
+	Dir        string
+	AcmeWWW    string
+	Issuer     Issuer
+	AllowIssue func() bool
 }
 
 func New(db *store.DB, sites *site.Service) *Service {
@@ -80,6 +81,9 @@ func (s *Service) List() ([]Cert, error) {
 }
 
 func (s *Service) Issue(ctx context.Context, siteID int64) error {
+	if s.AllowIssue != nil && !s.AllowIssue() {
+		return fmt.Errorf("备机不申请证书，由主机同步")
+	}
 	st, err := s.sites.Get(siteID)
 	if err != nil {
 		return err
@@ -165,6 +169,9 @@ func leafNotAfter(certPEM []byte) (time.Time, error) {
 }
 
 func (s *Service) RenewDue(ctx context.Context) error {
+	if s.AllowIssue != nil && !s.AllowIssue() {
+		return nil
+	}
 	cut := time.Now().UTC().Add(30 * 24 * time.Hour).Format(time.RFC3339)
 	rows, err := s.db.SQL.Query(`SELECT DISTINCT site_id FROM certificates WHERE site_id IS NOT NULL AND expires_at <= ?`, cut)
 	if err != nil {

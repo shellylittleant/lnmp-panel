@@ -1,0 +1,8 @@
+server {
+	listen 80 default_server;
+	listen [::]:80 default_server;
+	server_name _;
+	access_log /var/log/nginx/catchall-404.access.log lnmp_panel;
+	error_log /var/log/nginx/catchall-404.error.log;
+	return 404;
+}

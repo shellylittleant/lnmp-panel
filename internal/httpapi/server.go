@@ -12,6 +12,7 @@ import (
 	"lnmp-panel/internal/cron"
 	"lnmp-panel/internal/env"
 	"lnmp-panel/internal/firewall"
+	"lnmp-panel/internal/ha"
 	"lnmp-panel/internal/jobs"
 	"lnmp-panel/internal/logview"
 	"lnmp-panel/internal/migrate"
@@ -53,6 +54,7 @@ type Server struct {
 	Cron      *cron.Service
 	Scheduler *scheduler.Scheduler
 	Migrate   *migrate.Service
+	HA        *ha.Service
 }
 
 func (s *Server) Handler() http.Handler {
@@ -137,6 +139,18 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("POST /api/v1/migrate/peer/preflight", s.handleMigratePeerPreflight)
 	api.HandleFunc("POST /api/v1/migrate/peer/apply", s.handleMigratePeerApply)
 	api.HandleFunc("POST /api/v1/migrate/peer/cancel", s.handleMigratePeerCancel)
+	api.HandleFunc("GET /api/v1/ha/status", s.requireAuth(s.handleHAStatus))
+	api.HandleFunc("POST /api/v1/ha/token", s.requireAuth(s.handleHAToken))
+	api.HandleFunc("POST /api/v1/ha/pair", s.requireAuth(s.handleHAPair))
+	api.HandleFunc("POST /api/v1/ha/promote", s.requireAuth(s.handleHAPromote))
+	api.HandleFunc("POST /api/v1/ha/demote", s.requireAuth(s.handleHADemote))
+	api.HandleFunc("POST /api/v1/ha/sync/start", s.requireAuth(s.handleHASyncStart))
+	api.HandleFunc("GET /api/v1/ha/sync/status", s.requireAuth(s.handleHASyncStatus))
+	api.HandleFunc("GET /api/v1/ha/health", s.handleHAHealth)
+	api.HandleFunc("GET /api/v1/ha/peer-role", s.handleHAPeerRole)
+	api.HandleFunc("POST /api/v1/ha/accept", s.handleHAAccept)
+	api.HandleFunc("POST /api/v1/ha/peer/bundle", s.handleHAPeerBundle)
+	api.HandleFunc("POST /api/v1/ha/peer/repl-source", s.handleHAPeerRepl)
 	api.HandleFunc("GET /api/v1/templates", s.requireAuth(s.handleTemplates))
 	api.HandleFunc("POST /api/v1/templates", s.requireAuth(s.handleTemplateCreate))
 	api.HandleFunc("GET /api/v1/templates/{id}", s.requireAuth(s.handleTemplateGet))
@@ -206,7 +220,9 @@ func (s *Server) withSecurity(next http.Handler) http.Handler {
 		w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'")
 		r.Header.Set("X-Request-Id", newID(8))
-		if strings.HasPrefix(r.URL.Path, "/api/v1/migrate/accept") || strings.HasPrefix(r.URL.Path, "/api/v1/migrate/peer/") {
+		if strings.HasPrefix(r.URL.Path, "/api/v1/migrate/accept") || strings.HasPrefix(r.URL.Path, "/api/v1/migrate/peer/") ||
+			strings.HasPrefix(r.URL.Path, "/api/v1/ha/accept") || strings.HasPrefix(r.URL.Path, "/api/v1/ha/peer") ||
+			r.URL.Path == "/api/v1/ha/peer-role" || r.URL.Path == "/api/v1/ha/health" {
 			next.ServeHTTP(w, r)
 			return
 		}

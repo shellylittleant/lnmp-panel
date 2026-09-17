@@ -26,6 +26,7 @@ type Service struct {
 	ConfD      string
 	AcmeWWW    string
 	BackupRoot string
+	HAWWW      string
 	Runner     func(ctx context.Context, d time.Duration, argv ...string) (exec.Result, error)
 }
 
@@ -37,6 +38,7 @@ func New() *Service {
 		ConfD:      "/etc/nginx/conf.d",
 		AcmeWWW:    AcmeDir,
 		BackupRoot: "/var/lib/lnmp-panel/backups/nginx",
+		HAWWW:      "/var/www/.lnmp-panel-ha",
 		Runner:     exec.Run,
 	}
 }
@@ -179,6 +181,113 @@ func (s *Service) Read(siteKey string) (string, error) {
 
 func (s *Service) DisableDefault() {
 	_ = os.Remove(filepath.Join(s.Enabled, "default"))
+}
+
+const (
+	CatchallName    = "nginx_catchall_404"
+	MaintenanceName = "nginx_maintenance"
+	CatchallFile    = CatchallName + ".conf"
+	MaintenanceFile = MaintenanceName + ".conf"
+	MaintenanceHTML = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>维护中</title></head><body><h1>本机已降级</h1><p>检测到对端已启用主模式。本机 MySQL 只读，站点进入维护页，等待运维将本机设为备机。</p></body></html>`
+)
+
+func (s *Service) clearEnabled() error {
+	ents, err := os.ReadDir(s.Enabled)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return os.MkdirAll(s.Enabled, 0755)
+		}
+		return err
+	}
+	for _, e := range ents {
+		_ = os.Remove(filepath.Join(s.Enabled, e.Name()))
+	}
+	return nil
+}
+
+func (s *Service) enableNamed(file string) error {
+	src := filepath.Join(s.Available, file)
+	dst := filepath.Join(s.Enabled, file)
+	_ = os.Remove(dst)
+	return os.Symlink(src, dst)
+}
+
+func (s *Service) EnterCatchall404(content string) error {
+	if err := s.EnsureLayout(); err != nil {
+		return err
+	}
+	if err := panelFS.WriteAtomic(filepath.Join(s.Available, CatchallFile), []byte(content), 0644); err != nil {
+		return err
+	}
+	if err := s.clearEnabled(); err != nil {
+		return err
+	}
+	return s.enableNamed(CatchallFile)
+}
+
+func (s *Service) EnterMaintenance() error {
+	if err := s.EnsureLayout(); err != nil {
+		return err
+	}
+	www := s.HAWWW
+	if www == "" {
+		www = "/var/www/.lnmp-panel-ha"
+	}
+	if err := panelFS.Mkdir(www, 0755); err != nil {
+		return err
+	}
+	if err := panelFS.WriteAtomic(filepath.Join(www, "maintenance.html"), []byte(MaintenanceHTML), 0644); err != nil {
+		return err
+	}
+	conf := `server {
+	listen 80 default_server;
+	listen [::]:80 default_server;
+	server_name _;
+	root ` + www + `;
+	access_log /var/log/nginx/maintenance.access.log lnmp_panel;
+	error_log /var/log/nginx/maintenance.error.log;
+	error_page 503 /maintenance.html;
+	location / {
+		return 503;
+	}
+	location = /maintenance.html {
+		internal;
+	}
+}
+`
+	if err := panelFS.WriteAtomic(filepath.Join(s.Available, MaintenanceFile), []byte(conf), 0644); err != nil {
+		return err
+	}
+	if err := s.clearEnabled(); err != nil {
+		return err
+	}
+	return s.enableNamed(MaintenanceFile)
+}
+
+func (s *Service) EnableListed(siteKeys []string) error {
+	if err := s.EnsureLayout(); err != nil {
+		return err
+	}
+	if err := s.clearEnabled(); err != nil {
+		return err
+	}
+	for _, k := range siteKeys {
+		if k == "" {
+			continue
+		}
+		_ = s.Enable(k)
+	}
+	return nil
+}
+
+func (s *Service) Mode() string {
+	if _, err := os.Lstat(filepath.Join(s.Enabled, MaintenanceFile)); err == nil {
+		return "maintenance"
+	}
+	if _, err := os.Lstat(filepath.Join(s.Enabled, CatchallFile)); err == nil {
+		return "catchall_404"
+	}
+	return "sites"
 }
 
 type Redirect struct {

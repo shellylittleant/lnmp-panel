@@ -631,14 +631,22 @@ func (s *Service) importArgs() []string {
 }
 
 func (s *Service) ImportFrom(ctx context.Context, r io.Reader) error {
+	return s.importWith(ctx, r, 2*time.Minute, s.importArgs())
+}
+
+// ImportAsRoot 用 unix socket 的 root（auth_socket）导入，避免全库 dump 改写 mysql.user 后面板账号对不上。
+func (s *Service) ImportAsRoot(ctx context.Context, r io.Reader) error {
+	return s.importWith(ctx, r, 15*time.Minute, []string{"/usr/bin/mysql", "-uroot", "--batch"})
+}
+
+func (s *Service) importWith(ctx context.Context, r io.Reader, d time.Duration, args []string) error {
 	if s.SkipExec {
 		return nil
 	}
 	if err := s.Refuse(ctx); err != nil {
 		return err
 	}
-	args := s.importArgs()
-	res, err := exec.RunTo(ctx, 2*time.Minute, r, io.Discard, args...)
+	res, err := exec.RunTo(ctx, d, r, io.Discard, args...)
 	if err != nil {
 		msg := strings.TrimSpace(res.Stderr)
 		if msg == "" {

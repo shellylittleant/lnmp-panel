@@ -177,6 +177,12 @@ func TestKnownHostsUsesSSHHost(t *testing.T) {
 	}
 }
 
+func TestRemoteSSHPath(t *testing.T) {
+	if !remoteSSHPath("root@10.0.0.1:/var/www/") || remoteSSHPath("/var/www/") || remoteSSHPath("C:oops") {
+		t.Fatal("应识别 user@host:path 为远程")
+	}
+}
+
 func TestConnectPinsFingerprintAndKnownHosts(t *testing.T) {
 	s, dir := setupMig(t)
 	tok, err := s.Token()

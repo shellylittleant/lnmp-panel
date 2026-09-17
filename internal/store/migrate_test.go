@@ -118,6 +118,26 @@ func TestStage6Tables(t *testing.T) {
 	}
 }
 
+func TestStage7HAState(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(filepath.Join(dir, "panel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var role string
+	var term int
+	if err := db.SQL.QueryRow(`SELECT role, term FROM ha_state WHERE id=1`).Scan(&role, &term); err != nil {
+		t.Fatal(err)
+	}
+	if role != "standalone" || term != 0 {
+		t.Fatalf("ha_state %s %d", role, term)
+	}
+	if _, err := db.SQL.Exec(`INSERT INTO pairing_tokens(token_hash, expires_at, purpose) VALUES ('h','t','ha')`); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestJobsTable(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(filepath.Join(dir, "panel.db"))

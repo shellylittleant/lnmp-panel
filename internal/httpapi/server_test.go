@@ -27,6 +27,7 @@ import (
 	"lnmp-panel/internal/cron"
 	"lnmp-panel/internal/env"
 	"lnmp-panel/internal/firewall"
+	"lnmp-panel/internal/ha"
 	"lnmp-panel/internal/jobs"
 	"lnmp-panel/internal/logview"
 	"lnmp-panel/internal/migrate"
@@ -78,6 +79,7 @@ func startTest(t *testing.T) (base, prefix, password string, client *http.Client
 	ngx.ConfD = filepath.Join(dir, "conf.d")
 	ngx.AcmeWWW = filepath.Join(dir, "acme")
 	ngx.BackupRoot = filepath.Join(dir, "bak")
+	ngx.HAWWW = filepath.Join(dir, "ha-www")
 	if err := ngx.EnsureLayout(); err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +106,7 @@ func startTest(t *testing.T) (base, prefix, password string, client *http.Client
 	mysqlSvc.TmpDir = filepath.Join(dir, "tmp")
 	stack := &env.StackInstaller{
 		Jobs: jobSvc, MySQL: mysqlSvc, SkipExec: true, Codename: "noble",
-		KeyPath: filepath.Join(dir, "keyrings", "mysql.asc"),
+		KeyPath:  filepath.Join(dir, "keyrings", "mysql.asc"),
 		ListPath: filepath.Join(dir, "apt", "mysql-official.list"),
 		HTTPGet: func(url string) ([]byte, error) {
 			return []byte("-----BEGIN PGP PUBLIC KEY BLOCK-----\ntest\n-----END PGP PUBLIC KEY BLOCK-----\n"), nil
@@ -140,6 +142,14 @@ func startTest(t *testing.T) (base, prefix, password string, client *http.Client
 	mig.Sites, mig.Nginx, mig.Tpl, mig.SSL = sites, ngx, tpl, sslSvc
 	mig.WWW = sites.WWW
 	mig.DataDir = dir
+	haSvc := ha.New(db)
+	haSvc.Migrate, haSvc.Sites, haSvc.Nginx, haSvc.MySQL = mig, sites, ngx, mysqlSvc
+	haSvc.Firewall, haSvc.Settings, haSvc.SSL, haSvc.Tpl = fw, st, sslSvc, tpl
+	haSvc.TLSCert, haSvc.DataDir, haSvc.WWW = filepath.Join(dir, "t.crt"), dir, sites.WWW
+	haSvc.Secrets, haSvc.AuthKeys = filepath.Join(dir, "sec"), filepath.Join(dir, "ak")
+	haSvc.HostKeyPub = mig.HostKeyPub
+	haSvc.SkipExec = true
+	haSvc.DropInRoot = filepath.Join(dir, "systemd")
 	prefix = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	s := &Server{
 		Prefix:    prefix,
@@ -164,6 +174,7 @@ func startTest(t *testing.T) (base, prefix, password string, client *http.Client
 		Cron:      cronSvc,
 		Scheduler: sch,
 		Migrate:   mig,
+		HA:        haSvc,
 	}
 	https := &http.Server{Handler: s.Handler()}
 	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
@@ -661,6 +672,33 @@ func TestMigrateTokenAPI(t *testing.T) {
 	})
 	if code == 200 && e.OK {
 		t.Fatal("错误指纹应失败")
+	}
+}
+
+func TestHATokenAPI(t *testing.T) {
+	base, prefix, pass, client, _ := startTest(t)
+	api := base + "/" + prefix + "/api/v1"
+	csrf := loginCSRF(t, client, api, "admin", pass)
+	code, e := doJSON(t, client, "GET", api+"/ha/status", csrf, nil)
+	if code != 200 || !e.OK {
+		t.Fatalf("ha status %d %+v", code, e)
+	}
+	var st map[string]any
+	_ = json.Unmarshal(e.Data, &st)
+	if st["role"] != "standalone" {
+		t.Fatalf("默认单机 %+v", st)
+	}
+	code, e = doJSON(t, client, "POST", api+"/ha/token", csrf, map[string]any{})
+	if code != 200 || !e.OK {
+		t.Fatalf("ha token %d %+v", code, e)
+	}
+	code, e = doJSON(t, client, "POST", api+"/ha/promote", csrf, map[string]any{})
+	if code == 200 && e.OK {
+		t.Fatal("单机不得启用主模式")
+	}
+	code, e = doJSON(t, client, "POST", api+"/ha/sync/start", csrf, map[string]any{})
+	if code == 200 && e.OK {
+		t.Fatal("单机不得开始同步")
 	}
 }
 

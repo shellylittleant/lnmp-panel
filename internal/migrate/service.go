@@ -117,7 +117,25 @@ func (s *Service) Token() (TokenOut, error) {
 	}
 	exp := s.Now().Add(s.TokenTTL)
 	_, _ = s.db.SQL.Exec(`DELETE FROM pairing_tokens WHERE expires_at < ?`, s.Now().Format(time.RFC3339))
-	_, err = s.db.SQL.Exec(`INSERT INTO pairing_tokens(token_hash, expires_at) VALUES (?,?)`, HashToken(raw), exp.Format(time.RFC3339))
+	_, err = s.db.SQL.Exec(`INSERT INTO pairing_tokens(token_hash, expires_at, purpose) VALUES (?,?,?)`, HashToken(raw), exp.Format(time.RFC3339), "migrate")
+	if err != nil {
+		return TokenOut{}, err
+	}
+	return TokenOut{Token: raw, ExpiresAt: exp.Format(time.RFC3339), Prefix: FingerprintPrefix(fp), TTLSeconds: int(s.TokenTTL.Seconds())}, nil
+}
+
+func (s *Service) TokenHA() (TokenOut, error) {
+	fp, err := FingerprintPEMFile(s.TLSCert)
+	if err != nil {
+		return TokenOut{}, fmt.Errorf("读取本机证书指纹：%w", err)
+	}
+	raw, err := NewToken(fp)
+	if err != nil {
+		return TokenOut{}, err
+	}
+	exp := s.Now().Add(s.TokenTTL)
+	_, _ = s.db.SQL.Exec(`DELETE FROM pairing_tokens WHERE expires_at < ? AND purpose='ha' AND used_at IS NULL`, s.Now().Format(time.RFC3339))
+	_, err = s.db.SQL.Exec(`INSERT INTO pairing_tokens(token_hash, expires_at, purpose) VALUES (?,?,?)`, HashToken(raw), exp.Format(time.RFC3339), "ha")
 	if err != nil {
 		return TokenOut{}, err
 	}
@@ -217,8 +235,101 @@ func (s *Service) ExpireStale() error {
 		return nil
 	}
 	_ = removeAuthorizedKeys(s.AuthKeys)
-	_, _ = s.db.SQL.Exec(`DELETE FROM pairing_tokens`)
+	_, _ = s.db.SQL.Exec(`DELETE FROM pairing_tokens WHERE purpose IS NULL OR purpose='migrate'`)
 	return nil
+}
+
+func (s *Service) ConsumeHAToken(raw string) error {
+	if _, _, err := ParseToken(raw); err != nil {
+		return err
+	}
+	h := HashToken(raw)
+	var exp, used, purpose sql.NullString
+	err := s.db.SQL.QueryRow(`SELECT expires_at, used_at, purpose FROM pairing_tokens WHERE token_hash=?`, h).Scan(&exp, &used, &purpose)
+	if err != nil {
+		return fmt.Errorf("令牌无效")
+	}
+	if purpose.String != "ha" {
+		return fmt.Errorf("不是热备令牌")
+	}
+	if exp.String < s.Now().Format(time.RFC3339) {
+		return fmt.Errorf("令牌已过期")
+	}
+	if used.Valid && used.String != "" {
+		return fmt.Errorf("令牌已使用")
+	}
+	now := s.Now().Format(time.RFC3339)
+	_, err = s.db.SQL.Exec(`UPDATE pairing_tokens SET used_at=?, expires_at=? WHERE token_hash=?`, now, "2099-01-01T00:00:00Z", h)
+	return err
+}
+
+func (s *Service) ExportBundle(ctx context.Context) (Bundle, error) {
+	return s.exportBundle(ctx)
+}
+
+func (s *Service) ApplyConfigPull(ctx context.Context, b Bundle) ([]string, error) {
+	return s.applyBundleEx(ctx, b, true)
+}
+
+func (s *Service) PostPeer(ctx context.Context, address, fpFull, fpPrefix, path string, body any, out any) error {
+	return s.postPeer(ctx, address, fpFull, fpPrefix, path, body, out)
+}
+
+func (s *Service) GetPeer(ctx context.Context, address, fpFull, path, token string, out any) error {
+	hostPort, prefix, err := SplitHostPortFromAddr(address)
+	if err != nil {
+		return err
+	}
+	url := "https://" + hostPort + "/" + strings.Trim(prefix, "/") + "/api/v1" + path
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	if token != "" {
+		req.Header.Set("X-LNMP-Peer-Token", token)
+	}
+	do := s.HTTPDo
+	if do == nil {
+		cli := s.peerHTTP(fpFull, "")
+		cli.Timeout = 8 * time.Second
+		do = cli.Do
+	}
+	resp, err := do(req)
+	if err != nil {
+		return fmt.Errorf("请求对端失败：%w", err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	var envl struct {
+		OK    bool            `json:"ok"`
+		Data  json.RawMessage `json:"data"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(b, &envl); err != nil {
+		return fmt.Errorf("对端响应无效：%s", string(b))
+	}
+	if !envl.OK {
+		msg := "对端拒绝"
+		if envl.Error != nil {
+			msg = envl.Error.Message
+		}
+		return fmt.Errorf("%s", msg)
+	}
+	if out != nil && len(envl.Data) > 0 {
+		return json.Unmarshal(envl.Data, out)
+	}
+	return nil
+}
+
+func TLSClient(fpFull, fpPrefix string) *http.Client {
+	return &http.Client{
+		Timeout: 5 * time.Minute,
+		Transport: &http.Transport{
+			TLSClientConfig: tlsConfig(fpFull, fpPrefix),
+		},
+	}
 }
 
 type ConnectIn struct {
@@ -650,29 +761,48 @@ func (s *Service) peerSSH() (user string, port int) {
 }
 
 func (s *Service) rsyncPath(ctx context.Context, src, dest string) error {
-	srcStat := strings.TrimSuffix(src, "/")
-	if _, err := os.Stat(srcStat); err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
+	key := filepath.Join(s.Secrets, "migrate-key")
+	kh := filepath.Join(s.Secrets, "migrate-known_hosts")
+	_, port := s.peerSSH()
+	return RsyncOverSSH(ctx, s.Runner, src, dest, key, kh, port, s.SkipExec)
+}
+
+func remoteSSHPath(p string) bool {
+	i := strings.LastIndex(p, ":")
+	if i <= 0 {
+		return false
 	}
-	if s.SkipExec {
-		if strings.Contains(dest, ":") {
+	return strings.Contains(p[:i], "@")
+}
+
+func RsyncOverSSH(ctx context.Context, run func(context.Context, time.Duration, ...string) (exec.Result, error), src, dest, key, kh string, port int, skip bool, extra ...string) error {
+	if !remoteSSHPath(src) {
+		srcStat := strings.TrimSuffix(src, "/")
+		if _, err := os.Stat(srcStat); err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+	}
+	if skip {
+		if remoteSSHPath(src) || remoteSSHPath(dest) {
 			return nil
 		}
 		return copyRecursive(src, dest)
 	}
-	key := filepath.Join(s.Secrets, "migrate-key")
-	kh := filepath.Join(s.Secrets, "migrate-known_hosts")
-	_, port := s.peerSSH()
-	ssh := fmt.Sprintf("/usr/bin/ssh -i %s -p %d -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=%s -o GlobalKnownHostsFile=/dev/null -o BatchMode=yes",
-		key, port, kh)
-	run := s.Runner
+	if port <= 0 {
+		port = 22
+	}
 	if run == nil {
 		run = exec.Run
 	}
-	r, err := run(ctx, 30*time.Minute, "/usr/bin/rsync", "-a", "--delete", "--mkpath", "-e", ssh, src, dest)
+	ssh := fmt.Sprintf("/usr/bin/ssh -i %s -p %d -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=%s -o GlobalKnownHostsFile=/dev/null -o BatchMode=yes",
+		key, port, kh)
+	args := []string{"/usr/bin/rsync", "-a", "--delete", "--mkpath", "-e", ssh}
+	args = append(args, extra...)
+	args = append(args, src, dest)
+	r, err := run(ctx, 30*time.Minute, args...)
 	if err != nil {
 		return fmt.Errorf("%s", exec.Clip(r.Stderr+" "+r.Stdout))
 	}

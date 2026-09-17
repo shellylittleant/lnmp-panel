@@ -28,7 +28,28 @@ func authKeyLine(pub, fromIP string) string {
 	return opts + " " + pub
 }
 
+func UpsertHAAuthorizedKeys(path, pub, fromIP string) error {
+	return upsertAuthorizedKeysMarked(path, pub, fromIP, haAuthBegin, haAuthEnd)
+}
+
+func RemoveHAAuthorizedKeys(path string) error {
+	return removeAuthorizedKeysMarked(path, haAuthBegin, haAuthEnd)
+}
+
 func upsertAuthorizedKeys(path, pub, fromIP string) error {
+	return upsertAuthorizedKeysMarked(path, pub, fromIP, authBegin, authEnd)
+}
+
+func removeAuthorizedKeys(path string) error {
+	return removeAuthorizedKeysMarked(path, authBegin, authEnd)
+}
+
+const (
+	haAuthBegin = "# LNMP-PANEL-HA-BEGIN"
+	haAuthEnd   = "# LNMP-PANEL-HA-END"
+)
+
+func upsertAuthorizedKeysMarked(path, pub, fromIP, begin, end string) error {
 	pub = strings.TrimSpace(pub)
 	if pub == "" {
 		return fmt.Errorf("空公钥")
@@ -40,22 +61,22 @@ func upsertAuthorizedKeys(path, pub, fromIP string) error {
 	if b, err := os.ReadFile(path); err == nil {
 		existing = string(b)
 	}
-	outside := stripAuthBlock(existing)
+	outside := stripAuthBlockMarked(existing, begin, end)
 	var b strings.Builder
 	b.WriteString(outside)
 	if outside != "" && !strings.HasSuffix(outside, "\n") {
 		b.WriteByte('\n')
 	}
-	b.WriteString(authBegin + "\n")
+	b.WriteString(begin + "\n")
 	b.WriteString(authKeyLine(pub, fromIP) + "\n")
-	b.WriteString(authEnd + "\n")
+	b.WriteString(end + "\n")
 	if err := panelFS.Mkdir(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
 	return panelFS.WriteAtomic(path, []byte(b.String()), 0600)
 }
 
-func removeAuthorizedKeys(path string) error {
+func removeAuthorizedKeysMarked(path, begin, end string) error {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -63,7 +84,7 @@ func removeAuthorizedKeys(path string) error {
 		}
 		return err
 	}
-	out := stripAuthBlock(string(b))
+	out := stripAuthBlockMarked(string(b), begin, end)
 	if strings.TrimSpace(out) == "" {
 		return os.Remove(path)
 	}
@@ -74,16 +95,20 @@ func removeAuthorizedKeys(path string) error {
 }
 
 func stripAuthBlock(s string) string {
+	return stripAuthBlockMarked(s, authBegin, authEnd)
+}
+
+func stripAuthBlockMarked(s, begin, end string) string {
 	var out []string
 	in := false
 	sc := bufio.NewScanner(strings.NewReader(s))
 	for sc.Scan() {
 		ln := sc.Text()
-		if strings.TrimSpace(ln) == authBegin {
+		if strings.TrimSpace(ln) == begin {
 			in = true
 			continue
 		}
-		if strings.TrimSpace(ln) == authEnd {
+		if strings.TrimSpace(ln) == end {
 			in = false
 			continue
 		}
@@ -92,6 +117,18 @@ func stripAuthBlock(s string) string {
 		}
 	}
 	return strings.Join(out, "\n")
+}
+
+func WriteKnownHosts(path, sshHost string, sshPort int, hostKeyLine string) error {
+	return writeKnownHosts(path, sshHost, sshPort, hostKeyLine)
+}
+
+func SSHHostOf(address string) (string, error) {
+	return sshHostOf(address)
+}
+
+func ReadHostKeyPub(path string) (string, error) {
+	return readHostKeyPub(path)
 }
 
 func writeKnownHosts(path, sshHost string, sshPort int, hostKeyLine string) error {

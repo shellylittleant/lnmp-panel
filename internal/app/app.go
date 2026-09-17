@@ -6,9 +6,9 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
-	"log"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -21,6 +21,7 @@ import (
 	"lnmp-panel/internal/cron"
 	"lnmp-panel/internal/env"
 	"lnmp-panel/internal/firewall"
+	"lnmp-panel/internal/ha"
 	"lnmp-panel/internal/httpapi"
 	"lnmp-panel/internal/jobs"
 	"lnmp-panel/internal/logview"
@@ -37,7 +38,7 @@ import (
 	"lnmp-panel/internal/template"
 )
 
-const Version = "0.1.0-stage6"
+const Version = "0.1.0-stage7"
 
 func CLI(args []string) error {
 	if len(args) == 0 {
@@ -233,6 +234,20 @@ func Run(cfgPath string, skipOS bool) error {
 	}
 	sch.Register("migrate.expire", 24*time.Hour, func(ctx context.Context) error { return mig.ExpireStale() })
 
+	haSvc := ha.New(db)
+	haSvc.Migrate, haSvc.Sites, haSvc.Nginx, haSvc.MySQL = mig, sites, ngx, mysqlSvc
+	haSvc.Firewall, haSvc.Settings, haSvc.SSL, haSvc.Tpl = fw, setSvc, sslSvc, tpl
+	haSvc.TLSCert, haSvc.DataDir, haSvc.WWW = cfg.TLSCert, cfg.DataDir, sites.WWW
+	haSvc.Secrets, haSvc.AuthKeys = filepath.Join(cfg.DataDir, "secrets"), "/root/.ssh/authorized_keys"
+	if skipOS {
+		haSvc.SkipExec = true
+		haSvc.DropInRoot = filepath.Join(cfg.DataDir, "systemd")
+	}
+	sslSvc.AllowIssue = haSvc.AllowCertIssue
+	if err := haSvc.SelfProtect(context.Background()); err != nil {
+		log.Printf("自我保护：%v", err)
+	}
+
 	srv := &httpapi.Server{
 		Prefix:    cfg.PathPrefix,
 		Auth:      authSvc,
@@ -256,6 +271,7 @@ func Run(cfgPath string, skipOS bool) error {
 		Cron:      cronSvc,
 		Scheduler: sch,
 		Migrate:   mig,
+		HA:        haSvc,
 	}
 	baseCtx, baseCancel := context.WithCancel(context.Background())
 	defer baseCancel()

@@ -62,6 +62,8 @@ type Vars struct {
 	OpenPorts   []int
 	UDPPorts    []int
 	AllowCIDRs  []string
+	PeerCIDRs   []string
+	MySQLPort   int
 	InputPolicy string
 	PublicHTTP  bool
 }
@@ -263,9 +265,88 @@ func (s *Service) render(f Form) (string, error) {
 	}
 	v := Vars{
 		SSHPort: ports[0], SSHPorts: ports, PanelPort: f.PanelPort, OpenPorts: f.OpenPorts, UDPPorts: f.UDPPorts,
-		AllowCIDRs: f.AllowCIDRs, InputPolicy: f.InputPolicy, PublicHTTP: f.PublicHTTP,
+		AllowCIDRs: f.AllowCIDRs, PeerCIDRs: []string{}, InputPolicy: f.InputPolicy, PublicHTTP: f.PublicHTTP,
 	}
 	return template.Render(rec.Name, rec.Content, v)
+}
+
+func (s *Service) varsFromForm(f Form) Vars {
+	ports := f.SSHPorts
+	if len(ports) == 0 && f.SSHPort > 0 {
+		ports = []int{f.SSHPort}
+	}
+	if len(ports) == 0 {
+		ports = []int{22}
+	}
+	allow := f.AllowCIDRs
+	if allow == nil {
+		allow = []string{}
+	}
+	return Vars{
+		SSHPort: ports[0], SSHPorts: ports, PanelPort: f.PanelPort, OpenPorts: f.OpenPorts, UDPPorts: f.UDPPorts,
+		AllowCIDRs: allow, PeerCIDRs: []string{}, InputPolicy: f.InputPolicy, PublicHTTP: f.PublicHTTP,
+	}
+}
+
+// ApplyHA 按角色写入主机默认或备机白名单，并尽量加载。失败只返回警告，不阻断热备。
+func (s *Service) ApplyHA(ctx context.Context, role, peerIP string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.Ensure(); err != nil {
+		return err
+	}
+	name := "主机默认"
+	if role == "standby" {
+		name = "备机白名单"
+	}
+	rec, err := s.tpl.OfficialByName("nftables", name)
+	if err != nil {
+		return fmt.Errorf("缺少官方 nftables 模板 %s", name)
+	}
+	f := s.loadForm()
+	f.PublicHTTP = true
+	if role == "standby" {
+		f.InputPolicy = "drop"
+	}
+	f.normalize(s.panelPort(), s.detectedSSH())
+	if err := f.validate(); err != nil {
+		return err
+	}
+	v := s.varsFromForm(f)
+	if ip := strings.TrimSpace(peerIP); ip != "" {
+		if net.ParseIP(ip) != nil && !strings.Contains(ip, "/") {
+			ip += "/32"
+		}
+		v.PeerCIDRs = []string{ip}
+	} else {
+		v.PeerCIDRs = []string{}
+	}
+	if role == "master" {
+		v.MySQLPort = 3306
+	}
+	out, err := template.Render(rec.Name, rec.Content, v)
+	if err != nil {
+		return err
+	}
+	s.saveForm(f)
+	if err := s.writeDraft(out, false); err != nil {
+		return err
+	}
+	if err := panelFS.WriteAtomic(s.Canonical, []byte(out), 0600); err != nil {
+		return err
+	}
+	if s.SkipNFT {
+		return nil
+	}
+	if err := s.checkFile(ctx, s.Canonical); err != nil {
+		return fmt.Errorf("热备防火墙语法：%w", err)
+	}
+	if err := s.loadFile(ctx, s.Canonical); err != nil {
+		return fmt.Errorf("热备防火墙加载：%w", err)
+	}
+	now := s.db.Now()
+	_, _ = s.db.SQL.Exec(`UPDATE firewall_state SET pending_backup=NULL, confirm_deadline=NULL, last_applied_at=? WHERE id=1`, now)
+	return nil
 }
 
 func (s *Service) state() (raw bool, hash, pending, deadline, applied string) {

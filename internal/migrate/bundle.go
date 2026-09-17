@@ -234,6 +234,10 @@ func rewriteCertDir(conf string, newID int64) string {
 }
 
 func (s *Service) applyBundle(ctx context.Context, b Bundle) ([]string, error) {
+	return s.applyBundleEx(ctx, b, false)
+}
+
+func (s *Service) applyBundleEx(ctx context.Context, b Bundle, haPull bool) ([]string, error) {
 	var missing []string
 	hashToID := map[string]int64{}
 	if s.Tpl != nil {
@@ -344,13 +348,21 @@ func (s *Service) applyBundle(ctx context.Context, b Bundle) ([]string, error) {
 		if st.RawMode {
 			conf := rewriteCertDir(st.NginxConf, id)
 			_ = s.Nginx.WriteSite(st.SiteKey, conf)
-			if st.Enabled {
+			if st.Enabled && !haPull {
 				_ = s.Nginx.Enable(st.SiteKey)
 			}
 			continue
 		}
 		if s.Sites != nil {
-			if err := s.Sites.ApplyConf(ctx, id); err != nil {
+			if haPull {
+				s.Sites.SkipNX = true
+			}
+			err := s.Sites.ApplyConf(ctx, id)
+			if haPull {
+				s.Sites.SkipNX = false
+				_ = s.Nginx.Disable(st.SiteKey)
+			}
+			if err != nil {
 				return missing, fmt.Errorf("渲染站点 %s：%w", st.SiteKey, err)
 			}
 		}
@@ -408,7 +420,7 @@ func (s *Service) applyBundle(ctx context.Context, b Bundle) ([]string, error) {
 			_ = panelFS.WriteAtomic(pool, []byte(p.Pool), 0644)
 		}
 	}
-	if b.FirewallForm != nil && s.Firewall != nil {
+	if !haPull && b.FirewallForm != nil && s.Firewall != nil {
 		if err := s.Firewall.StageMigrated(*b.FirewallForm); err != nil {
 			return missing, fmt.Errorf("防火墙草稿：%w", err)
 		}
@@ -444,7 +456,7 @@ func (s *Service) applyBundle(ctx context.Context, b Bundle) ([]string, error) {
 		_ = s.Nginx.EnsureLayout()
 		if !s.Nginx.Installed() {
 			missing = append(missing, "Nginx")
-		} else if !s.SkipExec {
+		} else if !s.SkipExec && !haPull {
 			if err := s.Nginx.TestAndReload(ctx); err != nil {
 				return missing, fmt.Errorf("nginx 重载：%w", err)
 			}
