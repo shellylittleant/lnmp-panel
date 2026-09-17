@@ -24,6 +24,9 @@ func setup(t *testing.T) (*Service, string) {
 	_ = os.WriteFile(filepath.Join(s.DataDir, "panel.db"), []byte("db"), 0600)
 	_ = os.WriteFile(filepath.Join(s.Secrets, "ha-key"), []byte("k"), 0600)
 	_ = os.WriteFile(filepath.Join(s.EtcDir, "panel.json"), []byte("{}"), 0600)
+	_ = os.MkdirAll(filepath.Join(s.DataDir, "tls"), 0700)
+	s.PanelKey = filepath.Join(s.DataDir, "tls", "panel.key")
+	_ = os.WriteFile(s.PanelKey, []byte("KEY"), 0600)
 	return s, root
 }
 
@@ -43,6 +46,9 @@ func TestForbiddenSecretsAndDB(t *testing.T) {
 	}
 	if _, err := s.Resolve(filepath.Join(s.WWW, "demo", "a.txt")); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := s.Resolve(s.PanelKey); err != ErrForbidden {
+		t.Fatalf("panel.key: %v", err)
 	}
 }
 
@@ -148,6 +154,52 @@ func TestZipAndUnzipRoundtrip(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join(dest, "demo", "a.txt"))
 	if err != nil || string(b) != "hello" {
 		t.Fatalf("%s %v", b, err)
+	}
+}
+
+func TestParentDirCannotBypassProtected(t *testing.T) {
+	s, _ := setup(t)
+	dest := filepath.Join(s.WWW, "copy")
+	if err := s.Copy(s.DataDir, dest, false); err != ErrContains {
+		t.Fatalf("复制父目录：%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "secrets", "ha-key")); err == nil {
+		t.Fatal("复制不得带出 secrets")
+	}
+	if _, err := os.Stat(filepath.Join(dest, "panel.db")); err == nil {
+		t.Fatal("复制不得带出 panel.db")
+	}
+	moved := filepath.Join(s.WWW, "moved")
+	if err := s.Rename(s.DataDir, moved, false); err != ErrContains {
+		t.Fatalf("移动父目录：%v", err)
+	}
+	if _, err := os.Stat(s.Secrets); err != nil {
+		t.Fatal("移动失败后密钥目录应仍在原处")
+	}
+	if err := s.Delete(s.DataDir); err != ErrContains {
+		t.Fatalf("删除父目录：%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(s.DataDir, "panel.db")); err != nil {
+		t.Fatal("删除失败后面板数据库应仍在")
+	}
+}
+
+func TestCopyIntoSelfRejected(t *testing.T) {
+	s, _ := setup(t)
+	src := filepath.Join(s.WWW, "demo")
+	if err := s.Copy(src, filepath.Join(src, "nested"), false); err != ErrIntoSelf {
+		t.Fatalf("复制到子目录：%v", err)
+	}
+	if err := s.Rename(src, filepath.Join(src, "nested"), false); err != ErrIntoSelf {
+		t.Fatalf("移动到子目录：%v", err)
+	}
+}
+
+func TestCompressParentRejected(t *testing.T) {
+	s, _ := setup(t)
+	dest := filepath.Join(s.WWW, "all.zip")
+	if err := s.Compress([]string{s.DataDir}, dest); err != ErrContains {
+		t.Fatalf("压缩父目录：%v", err)
 	}
 }
 

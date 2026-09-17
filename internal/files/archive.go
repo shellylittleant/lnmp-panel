@@ -79,6 +79,15 @@ func (s *Service) ZipTo(w io.Writer, paths []string) error {
 }
 
 func (s *Service) Compress(paths []string, dest string) error {
+	for _, p := range paths {
+		abs, err := s.Resolve(p)
+		if err != nil {
+			return err
+		}
+		if err := s.rejectProtectedTree(abs); err != nil {
+			return err
+		}
+	}
 	abs, err := s.Resolve(dest)
 	if err != nil {
 		return err

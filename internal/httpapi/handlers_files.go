@@ -21,7 +21,8 @@ func fileErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, files.ErrExists):
 		writeErr(w, 409, "conflict", err.Error())
 	case errors.Is(err, files.ErrRoot), errors.Is(err, files.ErrTooLarge), errors.Is(err, files.ErrUploadTooLarge),
-		errors.Is(err, files.ErrBinary), errors.Is(err, files.ErrZipSlip), errors.Is(err, files.ErrNotDir), errors.Is(err, files.ErrIsDir):
+		errors.Is(err, files.ErrBinary), errors.Is(err, files.ErrZipSlip), errors.Is(err, files.ErrNotDir), errors.Is(err, files.ErrIsDir),
+		errors.Is(err, files.ErrContains), errors.Is(err, files.ErrIntoSelf):
 		writeErr(w, 400, "invalid", err.Error())
 	default:
 		writeErr(w, 400, "invalid", err.Error())

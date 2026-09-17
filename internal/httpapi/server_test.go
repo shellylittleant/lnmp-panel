@@ -162,6 +162,7 @@ func startTest(t *testing.T) (base, prefix, password string, client *http.Client
 	fileSvc.Secrets = filepath.Join(dir, "sec")
 	fileSvc.EtcDir = filepath.Join(dir, "etc")
 	fileSvc.WWW = sites.WWW
+	fileSvc.PanelKey = filepath.Join(dir, "tls", "panel.key")
 	prefix = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	s := &Server{
 		Prefix:    prefix,

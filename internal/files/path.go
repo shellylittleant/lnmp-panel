@@ -20,21 +20,25 @@ var (
 	ErrZipSlip        = errors.New("压缩包内路径超出目标目录")
 	ErrNotDir         = errors.New("不是目录")
 	ErrIsDir          = errors.New("这是目录")
+	ErrContains       = errors.New("该目录包含面板密钥或数据库，请缩小范围")
+	ErrIntoSelf       = errors.New("不能复制或移动到自身或其子目录")
 )
 
 type Service struct {
-	DataDir string
-	Secrets string
-	EtcDir  string
-	WWW     string
+	DataDir  string
+	Secrets  string
+	EtcDir   string
+	WWW      string
+	PanelKey string
 }
 
 func New() *Service {
 	return &Service{
-		DataDir: "/var/lib/lnmp-panel",
-		Secrets: "/var/lib/lnmp-panel/secrets",
-		EtcDir:  "/etc/lnmp-panel",
-		WWW:     "/var/www",
+		DataDir:  "/var/lib/lnmp-panel",
+		Secrets:  "/var/lib/lnmp-panel/secrets",
+		EtcDir:   "/etc/lnmp-panel",
+		WWW:      "/var/www",
+		PanelKey: "/var/lib/lnmp-panel/tls/panel.key",
 	}
 }
 
@@ -82,11 +86,53 @@ func (s *Service) Forbidden(abs string) bool {
 }
 
 func (s *Service) deny() []string {
-	out := []string{s.Secrets, s.EtcDir}
+	out := []string{s.Secrets, s.EtcDir, s.PanelKey}
 	if s.DataDir != "" {
 		out = append(out, filepath.Join(s.DataDir, "secrets"))
+		out = append(out, filepath.Join(s.DataDir, "tls", "panel.key"))
 	}
 	return out
+}
+
+// ContainsProtected 为真表示 path 本身是例外，或例外路径位于其下（父目录整棵操作会带出密钥/数据库）。
+func (s *Service) ContainsProtected(abs string) bool {
+	abs = canon(abs)
+	if abs == "" || abs == "/" {
+		return true
+	}
+	if s.Forbidden(abs) {
+		return true
+	}
+	for _, d := range s.protectedLeaves() {
+		if d == "" {
+			continue
+		}
+		d = canon(d)
+		if within(abs, d) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Service) protectedLeaves() []string {
+	out := s.deny()
+	if s.DataDir != "" {
+		data := s.DataDir
+		out = append(out,
+			filepath.Join(data, "panel.db"),
+			filepath.Join(data, "panel.db-wal"),
+			filepath.Join(data, "panel.db-shm"),
+		)
+	}
+	return out
+}
+
+func (s *Service) rejectProtectedTree(abs string) error {
+	if s.ContainsProtected(abs) {
+		return ErrContains
+	}
+	return nil
 }
 
 func canon(p string) string {

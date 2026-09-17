@@ -124,6 +124,9 @@ func (s *Service) Delete(path string) error {
 	if abs == "/" {
 		return ErrRoot
 	}
+	if err := s.rejectProtectedTree(abs); err != nil {
+		return err
+	}
 	if _, err := os.Lstat(abs); err != nil {
 		return ErrNotFound
 	}
@@ -141,6 +144,15 @@ func (s *Service) Rename(src, dest string, confirm bool) error {
 	}
 	if from == "/" || to == "/" {
 		return ErrRoot
+	}
+	if err := s.rejectProtectedTree(from); err != nil {
+		return err
+	}
+	if err := s.rejectProtectedTree(to); err != nil {
+		return err
+	}
+	if destUnderSrc(from, to) {
+		return ErrIntoSelf
 	}
 	if _, err := os.Lstat(to); err == nil {
 		if !confirm {
@@ -165,6 +177,15 @@ func (s *Service) Copy(src, dest string, confirm bool) error {
 	if err != nil {
 		return err
 	}
+	if err := s.rejectProtectedTree(from); err != nil {
+		return err
+	}
+	if err := s.rejectProtectedTree(to); err != nil {
+		return err
+	}
+	if destUnderSrc(from, to) {
+		return ErrIntoSelf
+	}
 	if _, err := os.Lstat(to); err == nil {
 		if !confirm {
 			return ErrExists
@@ -177,6 +198,11 @@ func (s *Service) Copy(src, dest string, confirm bool) error {
 		return err
 	}
 	return copyAll(from, to)
+}
+
+func destUnderSrc(src, dest string) bool {
+	src, dest = filepath.Clean(src), filepath.Clean(dest)
+	return dest == src || within(src, dest)
 }
 
 func copyAll(src, dst string) error {
@@ -259,6 +285,9 @@ func (s *Service) Chmod(path, owner, group string, mode os.FileMode, recursive b
 		return nil
 	}
 	if recursive {
+		if err := s.rejectProtectedTree(abs); err != nil {
+			return err
+		}
 		return filepath.Walk(abs, apply)
 	}
 	info, err := os.Lstat(abs)

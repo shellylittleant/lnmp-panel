@@ -279,6 +279,7 @@ func Run(cfgPath string, skipOS bool) error {
 		fileSvc.EtcDir = "/etc/lnmp-panel"
 	}
 	fileSvc.WWW = sites.WWW
+	fileSvc.PanelKey = filepath.Join(cfg.DataDir, "tls", "panel.key")
 
 	srv := &httpapi.Server{
 		Prefix:    cfg.PathPrefix,
