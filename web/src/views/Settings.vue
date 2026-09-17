@@ -1,8 +1,17 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
-import { NButton, NCard, NForm, NFormItem, NInput, NSelect, NSpace, useMessage } from "naive-ui";
+import { computed, onMounted, ref } from "vue";
+import { useRoute, useRouter } from "vue-router";
+import { NButton, NCard, NForm, NFormItem, NInput, NSelect, NSpace, NTabPane, NTabs, useMessage } from "naive-ui";
 import QRCode from "qrcode";
 import { api } from "../api";
+import EnvInstall from "./EnvInstall.vue";
+
+const route = useRoute();
+const router = useRouter();
+const tab = computed({
+  get: () => (route.query.tab === "env" ? "env" : "panel"),
+  set: (v: string) => router.replace({ query: v === "panel" ? {} : { tab: v } }),
+});
 
 const msg = useMessage();
 const bindMode = ref("public");
@@ -95,6 +104,8 @@ async function restart() {
 </script>
 
 <template>
+  <n-tabs v-model:value="tab" type="line">
+    <n-tab-pane name="panel" tab="面板">
   <n-space vertical size="large">
     <n-card title="访问限制">
       <n-form>
@@ -135,6 +146,11 @@ async function restart() {
       </n-space>
     </n-card>
   </n-space>
+    </n-tab-pane>
+    <n-tab-pane name="env" tab="环境安装">
+      <EnvInstall />
+    </n-tab-pane>
+  </n-tabs>
 </template>
 
 <style scoped>

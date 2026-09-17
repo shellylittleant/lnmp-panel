@@ -1,9 +1,17 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from "vue";
-import { NAlert, NButton, NCard, NCheckbox, NForm, NFormItem, NInput, NSpace, useMessage } from "naive-ui";
+import { computed, onMounted, onUnmounted, ref } from "vue";
+import { useRoute, useRouter } from "vue-router";
+import { NAlert, NButton, NCard, NCheckbox, NForm, NFormItem, NInput, NSpace, NTabPane, NTabs, useMessage } from "naive-ui";
+import Placeholder from "./Placeholder.vue";
 import { api } from "../api";
 
 const msg = useMessage();
+const route = useRoute();
+const router = useRouter();
+const tab = computed({
+  get: () => (route.query.tab === "ha" ? "ha" : "mig"),
+  set: (v: string) => router.replace({ query: v === "mig" ? {} : { tab: v } }),
+});
 const token = ref("");
 const expires = ref("");
 const address = ref("");
@@ -96,6 +104,8 @@ onUnmounted(() => {
 </script>
 
 <template>
+  <n-tabs v-model:value="tab" type="line">
+    <n-tab-pane name="mig" tab="迁移">
   <n-space vertical>
     <n-card title="本机作为目标（B）">
       <p>生成一次性配对令牌，在源机（A）填写本机 <code>https://主机:端口/路径前缀</code> 与令牌。</p>
@@ -135,4 +145,9 @@ onUnmounted(() => {
       <p v-else>尚无任务</p>
     </n-card>
   </n-space>
+    </n-tab-pane>
+    <n-tab-pane name="ha" tab="热备">
+      <Placeholder title="热备" />
+    </n-tab-pane>
+  </n-tabs>
 </template>

@@ -1,7 +1,11 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from "vue";
-import { NCard, NDescriptions, NDescriptionsItem, NProgress, NSpace } from "naive-ui";
+import { useRouter } from "vue-router";
+import { NButton, NCard, NDescriptions, NDescriptionsItem, NProgress, NSpace } from "naive-ui";
 import { api } from "../api";
+
+const router = useRouter();
+const env = ref<any>(null);
 
 const st = ref<Record<string, unknown> | null>(null);
 const err = ref("");
@@ -53,6 +57,8 @@ async function load() {
     `/metrics/history?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&step=raw`
   );
   if (h.ok) hist.value = (h.data.items || []).slice(-40);
+  const e = await api<any>("GET", "/env");
+  if (e.ok) env.value = e.data;
 }
 
 onMounted(() => {
@@ -95,6 +101,14 @@ const spark = () => {
         <n-descriptions-item label="MySQL">{{ svc.mysql }}</n-descriptions-item>
       </n-descriptions>
       <p v-else>加载中…</p>
+    </n-card>
+    <n-card title="环境状态">
+      <n-descriptions v-if="env" :column="1" bordered>
+        <n-descriptions-item label="Nginx">{{ env.nginx_installed ? "已安装" : "未安装" }}</n-descriptions-item>
+        <n-descriptions-item label="PHP">{{ env.php }}</n-descriptions-item>
+        <n-descriptions-item label="MySQL">{{ env.mysql_installed ? env.mysql : "未安装" }}</n-descriptions-item>
+      </n-descriptions>
+      <n-button style="margin-top: 12px" @click="router.push({ path: '/settings', query: { tab: 'env' } })">去环境安装</n-button>
     </n-card>
     <n-card title="资源指标">
       <div v-if="metrics">

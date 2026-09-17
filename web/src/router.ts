@@ -5,11 +5,8 @@ import Layout from "./views/Layout.vue";
 import Home from "./views/Home.vue";
 import Settings from "./views/Settings.vue";
 import Audit from "./views/Audit.vue";
-import Placeholder from "./views/Placeholder.vue";
 import Sites from "./views/Sites.vue";
 import SiteEdit from "./views/SiteEdit.vue";
-import Templates from "./views/Templates.vue";
-import PHP from "./views/PHP.vue";
 import MySQL from "./views/MySQL.vue";
 import Firewall from "./views/Firewall.vue";
 import Logs from "./views/Logs.vue";
@@ -29,15 +26,15 @@ export const router = createRouter({
         { path: "audit", component: Audit },
         { path: "sites", component: Sites },
         { path: "sites/:id", component: SiteEdit },
-        { path: "templates", component: Templates },
-        { path: "php", component: PHP },
         { path: "mysql", component: MySQL },
         { path: "firewall", component: Firewall },
         { path: "logs", component: Logs },
         { path: "cron", component: Cron },
         { path: "migrate", component: Migrate },
-        { path: "ha", component: Placeholder, props: { title: "热备" } },
-        { path: "plugins", component: Placeholder, props: { title: "插件" } },
+        { path: "templates", redirect: { path: "/sites", query: { tab: "tpl" } } },
+        { path: "php", redirect: { path: "/settings", query: { tab: "env" } } },
+        { path: "ha", redirect: { path: "/migrate", query: { tab: "ha" } } },
+        { path: "plugins", redirect: { path: "/settings", query: { tab: "env" } } },
       ],
     },
   ],

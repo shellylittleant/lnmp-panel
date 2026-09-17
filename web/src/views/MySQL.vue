@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
+import { useRouter } from "vue-router";
 import { NAlert, NButton, NCard, NForm, NFormItem, NInput, NSpace, NDataTable, useMessage } from "naive-ui";
 import type { DataTableColumns } from "naive-ui";
 import { api, apiForm, downloadSQL, waitJob } from "../api";
 
 const msg = useMessage();
+const router = useRouter();
 const env = ref<any>(null);
 const busy = ref("");
 const dbs = ref<{ name: string; charset: string; collate: string }[]>([]);
@@ -50,24 +52,6 @@ async function load() {
 }
 
 onMounted(load);
-
-async function installEnv() {
-  busy.value = "环境安装";
-  try {
-    const r = await api<{ job_id: string }>("POST", "/env/mysql/install", {});
-    if (!r.ok) {
-      msg.error(r.error.message);
-      return;
-    }
-    await waitJob(r.data.job_id, (ph, d) => (busy.value = `环境安装：${ph} ${d}`));
-    msg.success("完成");
-    await load();
-  } catch (e: any) {
-    msg.error(e.message);
-  } finally {
-    busy.value = "";
-  }
-}
 
 async function createDB() {
   const r = await api("POST", "/mysql/databases", { name: dbName.value, charset: "utf8mb4" });
@@ -180,20 +164,10 @@ async function useTpl() {
 
 <template>
   <n-space vertical>
-    <n-card title="MySQL">
-      <n-alert type="info" title="按架构分源">
-        x86_64 用 MySQL 官方 apt 8.4 LTS；arm64 用 Ubuntu 源 mysql-server 8.0。面板账号 lnmp_panel@localhost，密钥
-        /var/lib/lnmp-panel/secrets/mysql-panel.cnf，不改 root。
-      </n-alert>
-      <p v-if="env">
-        计划来源：{{ env.mysql_source === "official" ? "官方 8.4 LTS" : "Ubuntu mysql-server 8.0" }}；
-        官方源文件：{{ env.mysql_official_source ? "已配置" : "未配置" }}；{{ env.mysql }}
-      </p>
-      <n-space>
-        <n-button type="primary" :disabled="!!busy" @click="installEnv">安装 MySQL</n-button>
-        <span v-if="busy">{{ busy }}</span>
-      </n-space>
-    </n-card>
+    <n-alert v-if="env && !env.mysql_installed" type="warning" title="尚未安装 MySQL">
+      请到设置 → 环境安装完成后再建库。
+      <n-button size="small" style="margin-left: 8px" @click="router.push({ path: '/settings', query: { tab: 'env' } })">去环境安装</n-button>
+    </n-alert>
     <n-card title="数据库">
       <n-form inline>
         <n-form-item label="库名"><n-input v-model:value="dbName" placeholder="blog" /></n-form-item>

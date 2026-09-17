@@ -1,28 +1,39 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
-import { useRouter } from "vue-router";
+import { computed, onMounted, ref } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { NLayout, NLayoutSider, NLayoutContent, NMenu, NButton, NSpace } from "naive-ui";
 import type { MenuOption } from "naive-ui";
 import { api, setCsrf } from "../api";
 
 const router = useRouter();
+const route = useRoute();
 const user = ref("");
 
 const menu: MenuOption[] = [
   { label: "概览", key: "/" },
   { label: "网站", key: "/sites" },
-  { label: "模板", key: "/templates" },
-  { label: "PHP", key: "/php" },
   { label: "数据库", key: "/mysql" },
   { label: "防火墙", key: "/firewall" },
   { label: "日志", key: "/logs" },
   { label: "定时任务", key: "/cron" },
-  { label: "迁移", key: "/migrate" },
-  { label: "热备", key: "/ha" },
-  { label: "插件", key: "/plugins" },
+  { label: "迁移与热备", key: "/migrate" },
   { label: "设置", key: "/settings" },
   { label: "审计", key: "/audit" },
 ];
+
+const menuValue = computed(() => {
+  const p = route.path;
+  if (p === "/" || p === "") return "/";
+  if (p.startsWith("/sites")) return "/sites";
+  if (p.startsWith("/mysql")) return "/mysql";
+  if (p.startsWith("/firewall")) return "/firewall";
+  if (p.startsWith("/logs")) return "/logs";
+  if (p.startsWith("/cron")) return "/cron";
+  if (p.startsWith("/migrate")) return "/migrate";
+  if (p.startsWith("/settings")) return "/settings";
+  if (p.startsWith("/audit")) return "/audit";
+  return p;
+});
 
 onMounted(async () => {
   const r = await api<{ username: string; csrf_token: string }>("GET", "/auth/session");
@@ -48,7 +59,7 @@ function go(key: string) {
   <n-layout has-sider style="height: 100%">
     <n-layout-sider bordered width="200" content-style="padding: 12px 0">
       <div class="brand">LNMP 面板</div>
-      <n-menu :options="menu" :value="$route.path" @update:value="go" />
+      <n-menu :options="menu" :value="menuValue" @update:value="go" />
     </n-layout-sider>
     <n-layout>
       <div class="top">
