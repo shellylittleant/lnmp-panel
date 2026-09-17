@@ -105,6 +105,19 @@ async function issue() {
   msg.success("证书已签发并写回站点，配置在 1 到 2 秒内生效");
 }
 
+const certPem = ref("");
+const keyPem = ref("");
+
+async function importManual() {
+  const r = await api<{ warning?: string }>("POST", "/sites/" + id + "/ssl/import", { cert_pem: certPem.value, key_pem: keyPem.value });
+  if (!r.ok) {
+    msg.error(r.error.message);
+    return;
+  }
+  if (r.data.warning) msg.warning(r.data.warning);
+  else msg.success("手动证书已保存");
+}
+
 async function del() {
   const r = await api("DELETE", "/sites/" + id, undefined);
   if (!r.ok) {
@@ -125,7 +138,12 @@ async function del() {
       <n-form>
         <n-form-item label="名称"><n-input v-model:value="name" :disabled="rawMode" /></n-form-item>
         <n-form-item label="域名"><n-input v-model:value="domains" :disabled="rawMode" /></n-form-item>
-        <n-form-item label="根目录"><n-input v-model:value="root" :disabled="rawMode" /></n-form-item>
+        <n-form-item label="根目录">
+          <n-space>
+            <n-input v-model:value="root" :disabled="rawMode" />
+            <n-button @click="router.push({ path: '/files', query: { path: root } })">打开目录</n-button>
+          </n-space>
+        </n-form-item>
         <n-form-item label="PHP 版本"><n-select v-model:value="php" :options="phpOpts" :disabled="rawMode" /></n-form-item>
         <n-form-item label="反代目标"><n-input v-model:value="proxy" :disabled="rawMode" /></n-form-item>
         <n-form-item label="HTTP/2"><n-checkbox v-model:checked="http2" :disabled="rawMode" /></n-form-item>
@@ -143,6 +161,12 @@ async function del() {
           <n-button type="error" @click="del">删除站点</n-button>
         </n-space>
       </n-form>
+    </n-card>
+    <n-card title="手动填入证书">
+      <p>粘贴证书链 PEM 与私钥 PEM。过期拒绝；域名不覆盖只警告。手动证书不自动续期。</p>
+      <n-form-item label="证书链"><n-input v-model:value="certPem" type="textarea" :autosize="{ minRows: 6 }" /></n-form-item>
+      <n-form-item label="私钥"><n-input v-model:value="keyPem" type="textarea" :autosize="{ minRows: 6 }" /></n-form-item>
+      <n-button @click="importManual">保存手动证书</n-button>
     </n-card>
     <n-card title="nginx conf 原文">
       <n-input v-model:value="conf" type="textarea" :autosize="{ minRows: 16 }" />

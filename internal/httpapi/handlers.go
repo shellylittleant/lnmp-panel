@@ -248,7 +248,23 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"path_prefix": s.Prefix,
 		"services":    map[string]string{"nginx": nginxStatus(s), "php": phpStatus(s), "mysql": mysqlStatus(s)},
 		"metrics":     metrics,
+		"cert_alerts": certAlerts(s),
 	})
+}
+
+func certAlerts(s *Server) []any {
+	if s.SSL == nil {
+		return []any{}
+	}
+	items, err := s.SSL.ManualExpiring(30 * 24 * time.Hour)
+	if err != nil || items == nil {
+		return []any{}
+	}
+	out := make([]any, 0, len(items))
+	for _, c := range items {
+		out = append(out, c)
+	}
+	return out
 }
 
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {

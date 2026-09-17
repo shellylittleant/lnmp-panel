@@ -12,7 +12,7 @@ import Firewall from "./views/Firewall.vue";
 import Logs from "./views/Logs.vue";
 import Cron from "./views/Cron.vue";
 import Migrate from "./views/Migrate.vue";
-import PluginPage from "./views/PluginPage.vue";
+import Files from "./views/Files.vue";
 
 export const router = createRouter({
   history: createWebHistory(panelPrefix() + "/"),
@@ -36,7 +36,7 @@ export const router = createRouter({
         { path: "php", redirect: { path: "/settings", query: { tab: "env" } } },
         { path: "ha", redirect: { path: "/migrate", query: { tab: "ha" } } },
         { path: "plugins", redirect: { path: "/settings", query: { tab: "env" } } },
-        { path: "files", component: PluginPage },
+        { path: "files", component: Files },
       ],
     },
   ],

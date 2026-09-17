@@ -20,6 +20,7 @@ import (
 	"lnmp-panel/internal/auth"
 	"lnmp-panel/internal/cron"
 	"lnmp-panel/internal/env"
+	"lnmp-panel/internal/files"
 	"lnmp-panel/internal/firewall"
 	"lnmp-panel/internal/ha"
 	"lnmp-panel/internal/httpapi"
@@ -39,7 +40,7 @@ import (
 	"lnmp-panel/internal/template"
 )
 
-const Version = "0.1.0-stage8"
+const Version = "0.1.0-stage9"
 
 func CLI(args []string) error {
 	if len(args) == 0 {
@@ -270,6 +271,15 @@ func Run(cfgPath string, skipOS bool) error {
 		log.Printf("插件同步：%v", err)
 	}
 
+	fileSvc := files.New()
+	fileSvc.DataDir = cfg.DataDir
+	fileSvc.Secrets = filepath.Join(cfg.DataDir, "secrets")
+	fileSvc.EtcDir = filepath.Dir(cfgPath)
+	if fileSvc.EtcDir == "" || fileSvc.EtcDir == "." {
+		fileSvc.EtcDir = "/etc/lnmp-panel"
+	}
+	fileSvc.WWW = sites.WWW
+
 	srv := &httpapi.Server{
 		Prefix:    cfg.PathPrefix,
 		Auth:      authSvc,
@@ -295,17 +305,19 @@ func Run(cfgPath string, skipOS bool) error {
 		Migrate:   mig,
 		HA:        haSvc,
 		Plugins:   plugReg,
+		Files:     fileSvc,
 	}
 	baseCtx, baseCancel := context.WithCancel(context.Background())
 	defer baseCancel()
 	https := &http.Server{
-		Addr:         cfg.Listen,
-		Handler:      srv.Handler(),
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 5 * time.Minute,
-		IdleTimeout:  60 * time.Second,
-		TLSConfig:    &tls.Config{MinVersion: tls.VersionTLS12},
-		BaseContext:  func(net.Listener) context.Context { return baseCtx },
+		Addr:              cfg.Listen,
+		Handler:           srv.Handler(),
+		ReadHeaderTimeout: 15 * time.Second,
+		ReadTimeout:       30 * time.Minute,
+		WriteTimeout:      30 * time.Minute,
+		IdleTimeout:       60 * time.Second,
+		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12},
+		BaseContext:       func(net.Listener) context.Context { return baseCtx },
 	}
 	exitCh := make(chan struct{}, 1)
 	srv.Restart = func() {

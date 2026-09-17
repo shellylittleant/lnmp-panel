@@ -26,6 +26,7 @@ import (
 	"lnmp-panel/internal/auth"
 	"lnmp-panel/internal/cron"
 	"lnmp-panel/internal/env"
+	"lnmp-panel/internal/files"
 	"lnmp-panel/internal/firewall"
 	"lnmp-panel/internal/ha"
 	"lnmp-panel/internal/jobs"
@@ -156,6 +157,11 @@ func startTest(t *testing.T) (base, prefix, password string, client *http.Client
 		GetSetting: st.Get, PutSetting: st.Set,
 	})
 	_ = plugReg.Sync()
+	fileSvc := files.New()
+	fileSvc.DataDir = dir
+	fileSvc.Secrets = filepath.Join(dir, "sec")
+	fileSvc.EtcDir = filepath.Join(dir, "etc")
+	fileSvc.WWW = sites.WWW
 	prefix = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	s := &Server{
 		Prefix:    prefix,
@@ -182,6 +188,7 @@ func startTest(t *testing.T) (base, prefix, password string, client *http.Client
 		Migrate:   mig,
 		HA:        haSvc,
 		Plugins:   plugReg,
+		Files:     fileSvc,
 	}
 	https := &http.Server{Handler: s.Handler()}
 	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
@@ -789,7 +796,7 @@ func (p *httpStubPlugin) Routes() []plugin.Route {
 	}}
 }
 func (p *httpStubPlugin) Pages() []plugin.Page {
-	return []plugin.Page{{MenuTitle: "文件上传下载", Path: "/files"}}
+	return []plugin.Page{{MenuTitle: "文件上传下载", Path: "/fx-page"}}
 }
 func (p *httpStubPlugin) OnStart(plugin.Context) error { return nil }
 func (p *httpStubPlugin) OnStop(plugin.Context) error  { return nil }
@@ -839,6 +846,27 @@ func TestMigratePeerRateLimit(t *testing.T) {
 	}
 }
 
+func TestFilesListAndForbidden(t *testing.T) {
+	base, prefix, pass, client, srv := startTest(t)
+	api := base + "/" + prefix + "/api/v1"
+	csrf := loginCSRF(t, client, api, "admin", pass)
+	www := srv.Files.WWW
+	_ = os.MkdirAll(filepath.Join(www, "demo"), 0755)
+	_ = os.WriteFile(filepath.Join(www, "demo", "a.txt"), []byte("hi"), 0644)
+	code, e := doJSON(t, client, "GET", api+"/files/list?path="+www+"/demo", csrf, nil)
+	if code != 200 || !e.OK {
+		t.Fatalf("list %d %+v", code, e)
+	}
+	code, e = doJSON(t, client, "GET", api+"/files/list?path="+srv.Files.Secrets, csrf, nil)
+	if code != 403 {
+		t.Fatalf("secrets 应为 403，got %d %+v", code, e)
+	}
+	code, e = doJSON(t, client, "POST", api+"/files/delete", csrf, map[string]any{"path": "/", "confirm": true})
+	if code != 400 {
+		t.Fatalf("删根 %d %+v", code, e)
+	}
+}
+
 func TestPluginDisable404(t *testing.T) {
 	plugin.ResetForTest()
 	t.Cleanup(plugin.ResetForTest)
@@ -854,7 +882,7 @@ func TestPluginDisable404(t *testing.T) {
 	if code != 200 || !e.OK {
 		t.Fatalf("ping %d %+v", code, e)
 	}
-	req, _ := http.NewRequest("GET", base+"/"+prefix+"/files", nil)
+	req, _ := http.NewRequest("GET", base+"/"+prefix+"/fx-page", nil)
 	res, err := client.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -874,7 +902,7 @@ func TestPluginDisable404(t *testing.T) {
 	if code != 404 {
 		t.Fatalf("停用后 API 应为 404，got %d %+v", code, e)
 	}
-	req, _ = http.NewRequest("GET", base+"/"+prefix+"/files", nil)
+	req, _ = http.NewRequest("GET", base+"/"+prefix+"/fx-page", nil)
 	res, err = client.Do(req)
 	if err != nil {
 		t.Fatal(err)

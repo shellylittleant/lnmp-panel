@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from "vue";
 import { useRouter } from "vue-router";
-import { NButton, NCard, NDescriptions, NDescriptionsItem, NProgress, NSpace } from "naive-ui";
+import { NAlert, NButton, NCard, NDescriptions, NDescriptionsItem, NProgress, NSpace } from "naive-ui";
 import { api } from "../api";
 
 const router = useRouter();
 const env = ref<any>(null);
+const certAlerts = ref<{ domains: string; expires_at: string; issuer: string }[]>([]);
 
 const st = ref<Record<string, unknown> | null>(null);
 const err = ref("");
@@ -59,6 +60,8 @@ async function load() {
   if (h.ok) hist.value = (h.data.items || []).slice(-40);
   const e = await api<any>("GET", "/env");
   if (e.ok) env.value = e.data;
+  const alerts = (r.data as any).cert_alerts as typeof certAlerts.value | undefined;
+  certAlerts.value = alerts || [];
 }
 
 onMounted(() => {
@@ -87,6 +90,9 @@ const spark = () => {
 
 <template>
   <n-space vertical>
+    <n-alert v-for="(c, i) in certAlerts" :key="i" type="warning" title="手动证书即将到期">
+      {{ c.domains }} 到期 {{ c.expires_at }}。手动证书不自动续期，请在站点页重新填入或改回自动申请。
+    </n-alert>
     <n-card title="系统概览">
       <p v-if="err">{{ err }}</p>
       <n-descriptions v-else-if="st" :column="2" bordered>

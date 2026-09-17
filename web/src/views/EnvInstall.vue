@@ -70,7 +70,7 @@ async function runJob(title: string, path: string) {
         <div v-for="it in plugins" :key="it.id" style="display: flex; align-items: center; gap: 12px">
           <n-switch :value="it.enabled" @update:value="(v: boolean) => togglePlugin(it.id, v)" />
           <span>{{ it.name }}（{{ it.id }} {{ it.version }}）</span>
-          <n-button v-if="it.enabled && it.id === 'filexfer'" size="small" @click="$router.push('/files')">打开文件上传下载</n-button>
+          <span v-if="it.id === 'filexfer'">（已并入主菜单「文件」）</span>
           <span v-if="it.error" style="color: #d03050">{{ it.error }}</span>
         </div>
       </n-space>

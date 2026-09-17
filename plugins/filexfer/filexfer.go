@@ -16,7 +16,7 @@ import (
 )
 
 func init() {
-	plugin.Register(&FX{})
+	// 阶段 9：功能并入核心，不再注册。
 }
 
 type FX struct {

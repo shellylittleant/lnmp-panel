@@ -14,6 +14,7 @@ let haTimer: number | undefined;
 const menu: MenuOption[] = [
   { label: "概览", key: "/" },
   { label: "网站", key: "/sites" },
+  { label: "文件", key: "/files" },
   { label: "数据库", key: "/mysql" },
   { label: "防火墙", key: "/firewall" },
   { label: "日志", key: "/logs" },
@@ -27,6 +28,7 @@ const menuValue = computed(() => {
   const p = route.path;
   if (p === "/" || p === "") return "/";
   if (p.startsWith("/sites")) return "/sites";
+  if (p.startsWith("/files")) return "/files";
   if (p.startsWith("/mysql")) return "/mysql";
   if (p.startsWith("/firewall")) return "/firewall";
   if (p.startsWith("/logs")) return "/logs";

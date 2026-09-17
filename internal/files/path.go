@@ -1,0 +1,144 @@
+package files
+
+import (
+	"errors"
+	"os"
+	"os/user"
+	"path/filepath"
+	"strconv"
+	"strings"
+)
+
+var (
+	ErrForbidden      = errors.New("禁止操作面板密钥或数据库文件")
+	ErrRoot           = errors.New("不能删除文件系统根")
+	ErrNotFound       = errors.New("路径不存在")
+	ErrExists         = errors.New("目标已存在，请确认覆盖")
+	ErrTooLarge       = errors.New("超过 1 MB，请下载后编辑")
+	ErrUploadTooLarge = errors.New("超过 2 GB 上限")
+	ErrBinary         = errors.New("不是文本文件")
+	ErrZipSlip        = errors.New("压缩包内路径超出目标目录")
+	ErrNotDir         = errors.New("不是目录")
+	ErrIsDir          = errors.New("这是目录")
+)
+
+type Service struct {
+	DataDir string
+	Secrets string
+	EtcDir  string
+	WWW     string
+}
+
+func New() *Service {
+	return &Service{
+		DataDir: "/var/lib/lnmp-panel",
+		Secrets: "/var/lib/lnmp-panel/secrets",
+		EtcDir:  "/etc/lnmp-panel",
+		WWW:     "/var/www",
+	}
+}
+
+func (s *Service) Resolve(p string) (string, error) {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		p = s.WWW
+		if p == "" {
+			p = "/var/www"
+		}
+	}
+	if !filepath.IsAbs(p) {
+		p = "/" + strings.TrimPrefix(p, "/")
+	}
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return "", err
+	}
+	abs = filepath.Clean(abs)
+	if s.Forbidden(abs) {
+		return "", ErrForbidden
+	}
+	return abs, nil
+}
+
+func (s *Service) Forbidden(abs string) bool {
+	eval := canon(abs)
+	for _, d := range s.deny() {
+		if d == "" {
+			continue
+		}
+		d = canon(d)
+		if eval == d || strings.HasPrefix(eval, d+string(os.PathSeparator)) {
+			return true
+		}
+	}
+	base := filepath.Base(eval)
+	if base == "panel.db" || strings.HasPrefix(base, "panel.db-") {
+		data := canon(s.DataDir)
+		if data != "" && (eval == filepath.Join(data, base) || strings.HasPrefix(eval, data+string(os.PathSeparator))) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Service) deny() []string {
+	out := []string{s.Secrets, s.EtcDir}
+	if s.DataDir != "" {
+		out = append(out, filepath.Join(s.DataDir, "secrets"))
+	}
+	return out
+}
+
+func canon(p string) string {
+	p = filepath.Clean(p)
+	if p == "" {
+		return p
+	}
+	if e, err := filepath.EvalSymlinks(p); err == nil {
+		return e
+	}
+	if e, err := filepath.EvalSymlinks(filepath.Dir(p)); err == nil {
+		return filepath.Join(e, filepath.Base(p))
+	}
+	if a, err := filepath.Abs(p); err == nil {
+		return filepath.Clean(a)
+	}
+	return p
+}
+
+func within(root, path string) bool {
+	root = filepath.Clean(root)
+	path = filepath.Clean(path)
+	if path == root {
+		return true
+	}
+	return strings.HasPrefix(path, root+string(os.PathSeparator))
+}
+
+func chownWWWData(path string) {
+	u, err := user.Lookup("www-data")
+	if err != nil {
+		return
+	}
+	uid, err1 := strconv.Atoi(u.Uid)
+	gid, err2 := strconv.Atoi(u.Gid)
+	if err1 != nil || err2 != nil {
+		return
+	}
+	_ = os.Chown(path, uid, gid)
+}
+
+func chownWWWWalk(root string) {
+	_ = filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		chownWWWData(p)
+		if info.IsDir() {
+			_ = os.Chmod(p, 0755)
+		} else if info.Mode().IsRegular() {
+			_ = os.Chmod(p, 0644)
+		}
+		return nil
+	})
+}

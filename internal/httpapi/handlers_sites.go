@@ -3,8 +3,10 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"lnmp-panel/internal/mysql"
 	"lnmp-panel/internal/php"
@@ -314,6 +316,52 @@ func (s *Server) handleSSLIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeOK(w, map[string]any{})
+}
+
+func (s *Server) handleSSLImport(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if s.SSL == nil {
+		writeErr(w, 500, "internal", "证书模块未初始化")
+		return
+	}
+	var certPEM, keyPEM []byte
+	ct := r.Header.Get("Content-Type")
+	if strings.HasPrefix(ct, "multipart/") {
+		if err := r.ParseMultipartForm(4 << 20); err != nil {
+			writeErr(w, 400, "invalid", "请上传证书与私钥")
+			return
+		}
+		if f, _, err := r.FormFile("cert"); err == nil {
+			certPEM, _ = io.ReadAll(io.LimitReader(f, 1<<20))
+			_ = f.Close()
+		}
+		if f, _, err := r.FormFile("key"); err == nil {
+			keyPEM, _ = io.ReadAll(io.LimitReader(f, 1<<20))
+			_ = f.Close()
+		}
+		if len(certPEM) == 0 {
+			certPEM = []byte(r.FormValue("cert_pem"))
+		}
+		if len(keyPEM) == 0 {
+			keyPEM = []byte(r.FormValue("key_pem"))
+		}
+	} else {
+		var in struct {
+			CertPEM string `json:"cert_pem"`
+			KeyPEM  string `json:"key_pem"`
+		}
+		if err := readJSON(w, r, &in); err != nil {
+			writeErr(w, 400, "invalid", "请求格式错误")
+			return
+		}
+		certPEM, keyPEM = []byte(in.CertPEM), []byte(in.KeyPEM)
+	}
+	res, err := s.SSL.ImportManual(id, certPEM, keyPEM)
+	if err != nil {
+		writeErr(w, 400, "invalid", err.Error())
+		return
+	}
+	writeOK(w, res)
 }
 
 func (s *Server) handleCerts(w http.ResponseWriter, r *http.Request) {

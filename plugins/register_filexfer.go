@@ -2,4 +2,4 @@
 
 package plugins
 
-import _ "lnmp-panel/plugins/filexfer"
+// filexfer 已并入核心文件管理，不再注册为插件。

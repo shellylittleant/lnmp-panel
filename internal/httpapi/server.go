@@ -12,6 +12,7 @@ import (
 	"lnmp-panel/internal/auth"
 	"lnmp-panel/internal/cron"
 	"lnmp-panel/internal/env"
+	"lnmp-panel/internal/files"
 	"lnmp-panel/internal/firewall"
 	"lnmp-panel/internal/ha"
 	"lnmp-panel/internal/jobs"
@@ -58,6 +59,7 @@ type Server struct {
 	Migrate   *migrate.Service
 	HA        *ha.Service
 	Plugins   *plugin.Registry
+	Files     *files.Service
 
 	peerLimOnce sync.Once
 	peerLim     *ipLimiter
@@ -185,7 +187,25 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("PUT /api/v1/sites/{id}/redirects", s.requireMaster(s.handleRedirects))
 	api.HandleFunc("POST /api/v1/sites/{id}/ssl/issue", s.requireMaster(s.handleSSLIssue))
 	api.HandleFunc("POST /api/v1/sites/{id}/ssl/renew", s.requireMaster(s.handleSSLIssue))
+	api.HandleFunc("POST /api/v1/sites/{id}/ssl/import", s.requireMaster(s.handleSSLImport))
 	api.HandleFunc("GET /api/v1/certs", s.requireAuth(s.handleCerts))
+	api.HandleFunc("GET /api/v1/files/list", s.requireAuth(s.handleFilesList))
+	api.HandleFunc("GET /api/v1/files/users", s.requireAuth(s.handleFilesUsers))
+	api.HandleFunc("GET /api/v1/files/shortcuts", s.requireAuth(s.handleFilesShortcuts))
+	api.HandleFunc("GET /api/v1/files/download", s.requireAuth(s.handleFilesDownload))
+	api.HandleFunc("GET /api/v1/files/zip", s.requireAuth(s.handleFilesZip))
+	api.HandleFunc("GET /api/v1/files/read", s.requireAuth(s.handleFilesRead))
+	api.HandleFunc("POST /api/v1/files/mkdir", s.requireMaster(s.handleFilesMkdir))
+	api.HandleFunc("POST /api/v1/files/create", s.requireMaster(s.handleFilesCreate))
+	api.HandleFunc("POST /api/v1/files/delete", s.requireMaster(s.handleFilesDelete))
+	api.HandleFunc("POST /api/v1/files/copy", s.requireMaster(s.handleFilesCopy))
+	api.HandleFunc("POST /api/v1/files/move", s.requireMaster(s.handleFilesMove))
+	api.HandleFunc("POST /api/v1/files/rename", s.requireMaster(s.handleFilesRename))
+	api.HandleFunc("POST /api/v1/files/upload", s.requireMaster(s.handleFilesUpload))
+	api.HandleFunc("POST /api/v1/files/compress", s.requireMaster(s.handleFilesCompress))
+	api.HandleFunc("POST /api/v1/files/unzip", s.requireMaster(s.handleFilesUnzip))
+	api.HandleFunc("PUT /api/v1/files/write", s.requireMaster(s.handleFilesWrite))
+	api.HandleFunc("POST /api/v1/files/chmod", s.requireMaster(s.handleFilesChmod))
 
 	inner := http.NewServeMux()
 	inner.Handle("/api/", s.withSecurity(s.auditWrites(api)))
@@ -213,7 +233,7 @@ func (s *Server) spa() http.Handler {
 			fileServer.ServeHTTP(w, r)
 			return
 		}
-		if s.Plugins != nil {
+		if s.Plugins != nil && r.URL.Path != "/files" && !strings.HasPrefix(r.URL.Path, "/files/") {
 			if is, en := s.Plugins.PageState(r.URL.Path); is && !en {
 				http.NotFound(w, r)
 				return

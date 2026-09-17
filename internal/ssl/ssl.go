@@ -173,7 +173,7 @@ func (s *Service) RenewDue(ctx context.Context) error {
 		return nil
 	}
 	cut := time.Now().UTC().Add(30 * 24 * time.Hour).Format(time.RFC3339)
-	rows, err := s.db.SQL.Query(`SELECT DISTINCT site_id FROM certificates WHERE site_id IS NOT NULL AND expires_at <= ?`, cut)
+	rows, err := s.db.SQL.Query(`SELECT DISTINCT site_id FROM certificates WHERE site_id IS NOT NULL AND issuer <> 'manual' AND expires_at <= ?`, cut)
 	if err != nil {
 		return err
 	}
