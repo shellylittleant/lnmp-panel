@@ -31,3 +31,11 @@ func ShouldDegrade(localRole string, localTerm int, peerReachable bool, peerRole
 	}
 	return peerRole == RoleMaster && peerTerm > localTerm
 }
+
+// NextTerm 提升时用 max(本机, 已知对端任期)+1，避免备机任期落后造成双主。
+func NextTerm(local, peer int) int {
+	if peer > local {
+		return peer + 1
+	}
+	return local + 1
+}

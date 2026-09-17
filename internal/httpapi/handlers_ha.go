@@ -174,6 +174,22 @@ func (s *Server) handleHAPeerBundle(w http.ResponseWriter, r *http.Request) {
 	writeOK(w, b)
 }
 
+func (s *Server) handleHAPeerStepDown(w http.ResponseWriter, r *http.Request) {
+	if s.HA == nil {
+		writeErr(w, 500, "internal", "热备模块未初始化")
+		return
+	}
+	if err := s.haPeerAuth(r); err != nil {
+		writeErr(w, 401, "unauthorized", err.Error())
+		return
+	}
+	if err := s.HA.StepDown(r.Context()); err != nil {
+		writeErr(w, 400, "invalid", err.Error())
+		return
+	}
+	writeOK(w, map[string]any{})
+}
+
 func (s *Server) handleHAPeerRepl(w http.ResponseWriter, r *http.Request) {
 	if s.HA == nil {
 		writeErr(w, 500, "internal", "热备模块未初始化")

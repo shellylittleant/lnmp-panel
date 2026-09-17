@@ -1,13 +1,21 @@
 package ha
 
 import (
+	"context"
+	"io"
+	"net/http"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"lnmp-panel/internal/jobs"
 	"lnmp-panel/internal/migrate"
+	"lnmp-panel/internal/mysql"
 	"lnmp-panel/internal/settings"
 	"lnmp-panel/internal/store"
+	"lnmp-panel/internal/template"
 )
 
 func TestNextInterval(t *testing.T) {
@@ -78,5 +86,235 @@ func TestHATokenSurvivesMigrateExpire(t *testing.T) {
 	}
 	if err := db.SQL.QueryRow(`SELECT COUNT(1) FROM pairing_tokens WHERE token_hash='mig-tok'`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("迁移令牌应被清理：%d %v", n, err)
+	}
+}
+
+func setupHA(t *testing.T) *Service {
+	t.Helper()
+	dir := t.TempDir()
+	db, err := store.Open(filepath.Join(dir, "p.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	st := settings.New(db)
+	s := New(db)
+	s.Settings = st
+	s.SkipExec = true
+	s.Secrets = filepath.Join(dir, "sec")
+	s.DataDir = dir
+	s.DropInRoot = filepath.Join(dir, "systemd")
+	s.WWW = filepath.Join(dir, "www")
+	tpl := template.New(db)
+	mysqlSvc := mysql.New(db, tpl, jobs.New(db))
+	mysqlSvc.SkipExec = true
+	mysqlSvc.Defaults = filepath.Join(dir, "mysql-panel.cnf")
+	s.MySQL = mysqlSvc
+	mig := migrate.New(db)
+	mig.SkipExec = true
+	mig.Settings = st
+	mig.Secrets = s.Secrets
+	s.Migrate = mig
+	return s
+}
+
+func TestNextTerm(t *testing.T) {
+	if NextTerm(1, 1) != 2 {
+		t.Fatal(NextTerm(1, 1))
+	}
+	if NextTerm(1, 2) != 3 {
+		t.Fatal("应用已知对端任期")
+	}
+	if NextTerm(4, 2) != 5 {
+		t.Fatal("本机更大时仍 +1")
+	}
+}
+
+func TestTwoRoundSwitchDegradesOldMaster(t *testing.T) {
+	// 第一轮：A term=1 主机，B 同步后 term=1，B 提升为 2。A 重启必须降级。
+	if NextTerm(1, 1) != 2 {
+		t.Fatal("第一轮提升")
+	}
+	if !ShouldDegrade(RoleMaster, 1, true, RoleMaster, 2) {
+		t.Fatal("第一轮旧主机应降级")
+	}
+	// 第二轮：A 作为备机追上 term=2，提升为 3。B 重启必须降级。
+	if NextTerm(2, 2) != 3 {
+		t.Fatal("第二轮提升")
+	}
+	if !ShouldDegrade(RoleMaster, 2, true, RoleMaster, 3) {
+		t.Fatal("第二轮旧主机应降级")
+	}
+	// 回归：任期未传播时两边都是 2，自我保护失效（审核实测双主）。
+	if ShouldDegrade(RoleMaster, 2, true, RoleMaster, 2) {
+		t.Fatal("任期相同不得降级（因此必须传播任期）")
+	}
+}
+
+func TestAdoptPeerTerm(t *testing.T) {
+	s := setupHA(t)
+	if err := s.saveRole(RoleStandby, 0, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.adoptPeerTerm(2); err != nil {
+		t.Fatal(err)
+	}
+	st, err := s.loadState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Term != 2 || st.Role != RoleStandby {
+		t.Fatalf("got %+v", st)
+	}
+	if s.knownPeerTerm() != 2 {
+		t.Fatalf("peer term %d", s.knownPeerTerm())
+	}
+	if err := s.adoptPeerTerm(1); err != nil {
+		t.Fatal(err)
+	}
+	st, _ = s.loadState()
+	if st.Term != 2 {
+		t.Fatal("任期不得回退")
+	}
+}
+
+func TestPullAndAdoptTerm(t *testing.T) {
+	s := setupHA(t)
+	if err := s.saveRole(RoleStandby, 0, 1); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Settings.Set("ha_peer_address", "https://peer.example:18443/pfx")
+	_ = s.Settings.Set("ha_peer_fingerprint", "aa")
+	_ = s.Settings.Set("ha_machine_token", "tok")
+	s.Migrate.HTTPDo = func(req *http.Request) (*http.Response, error) {
+		body := `{"ok":true,"data":{"role":"master","term":4,"degraded":false}}`
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+	}
+	if err := s.pullAndAdoptTerm(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := s.loadState()
+	if st.Term != 4 {
+		t.Fatalf("term %d", st.Term)
+	}
+}
+
+func TestPromoteUsesMaxTermPlusOne(t *testing.T) {
+	s := setupHA(t)
+	s.MySQL = nil
+	if err := s.saveRole(RoleStandby, 0, 1); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Settings.Set("ha_peer_term", "2")
+	if err := s.Promote(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := s.loadState()
+	if st.Role != RoleMaster || st.Term != 3 {
+		t.Fatalf("want master term 3 got %s %d", st.Role, st.Term)
+	}
+}
+
+func TestPromoteRequestsStepDown(t *testing.T) {
+	s := setupHA(t)
+	s.MySQL = nil
+	if err := s.saveRole(RoleStandby, 0, 1); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Settings.Set("ha_peer_address", "https://peer.example:18443/pfx")
+	_ = s.Settings.Set("ha_peer_fingerprint", "aa")
+	_ = s.Settings.Set("ha_machine_token", "tok")
+	var paths []string
+	s.Migrate.HTTPDo = func(req *http.Request) (*http.Response, error) {
+		paths = append(paths, req.Method+" "+req.URL.Path)
+		payload := `{"ok":true,"data":{"role":"master","term":1,"degraded":false}}`
+		if strings.Contains(req.URL.Path, "step-down") {
+			payload = `{"ok":true,"data":{}}`
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(payload)), Header: make(http.Header)}, nil
+	}
+	if err := s.Promote(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, p := range paths {
+		if strings.Contains(p, "step-down") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("未调用 step-down: %v", paths)
+	}
+	st, _ := s.loadState()
+	if st.Role != RoleMaster || st.Term != 2 {
+		t.Fatalf("got %s %d", st.Role, st.Term)
+	}
+}
+
+func TestStepDownMasterGoesReadOnly(t *testing.T) {
+	s := setupHA(t)
+	s.MySQL = nil
+	if err := s.saveRole(RoleMaster, 0, 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.StepDown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !s.degraded() {
+		t.Fatal("应进入自我保护")
+	}
+	st, _ := s.loadState()
+	if st.Role != RoleMaster {
+		t.Fatalf("角色仍应是主机，got %s", st.Role)
+	}
+}
+
+func TestStepDownStandbyNoop(t *testing.T) {
+	s := setupHA(t)
+	if err := s.saveRole(RoleStandby, 0, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.StepDown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if s.degraded() {
+		t.Fatal("备机不应被 step-down 标成 degraded")
+	}
+}
+
+func TestValidMachineToken(t *testing.T) {
+	s := setupHA(t)
+	if err := s.ValidMachineToken(""); err == nil {
+		t.Fatal("空令牌")
+	}
+	if err := s.ValidMachineToken("x"); err == nil {
+		t.Fatal("未设置")
+	}
+	_ = s.Settings.Set("ha_machine_token", "secret-token-value")
+	if err := s.ValidMachineToken("secret-token-value"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ValidMachineToken("secret-token-valuE"); err == nil {
+		t.Fatal("大小写不同应拒绝")
+	}
+	if err := s.ValidMachineToken("short"); err == nil {
+		t.Fatal("长度不同应拒绝")
+	}
+}
+
+func TestApplySharedPanelPassword(t *testing.T) {
+	s := setupHA(t)
+	if err := s.MySQL.WritePanelCNF("sharedPassAa1"); err != nil {
+		t.Fatal(err)
+	}
+	if s.MySQL.PanelPassword() != "sharedPassAa1" {
+		t.Fatalf("got %q", s.MySQL.PanelPassword())
+	}
+	b, err := os.ReadFile(s.MySQL.Defaults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "lnmp_panel") || !strings.Contains(string(b), "sharedPassAa1") {
+		t.Fatal(string(b))
 	}
 }

@@ -3,12 +3,14 @@ package ha
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -95,22 +97,24 @@ type AcceptIn struct {
 }
 
 type AcceptOut struct {
-	SSHUser      string `json:"ssh_user"`
-	SSHPort      int    `json:"ssh_port"`
-	SSHHostKey   string `json:"ssh_host_key"`
-	SSHPub       string `json:"ssh_pub"`
-	PeerID       int64  `json:"peer_id"`
-	Term         int    `json:"term"`
-	Role         string `json:"role"`
-	MachineToken string `json:"machine_token"`
-	Fingerprint  string `json:"fingerprint"`
+	SSHUser       string `json:"ssh_user"`
+	SSHPort       int    `json:"ssh_port"`
+	SSHHostKey    string `json:"ssh_host_key"`
+	SSHPub        string `json:"ssh_pub"`
+	PeerID        int64  `json:"peer_id"`
+	Term          int    `json:"term"`
+	Role          string `json:"role"`
+	MachineToken  string `json:"machine_token"`
+	Fingerprint   string `json:"fingerprint"`
+	PanelPassword string `json:"panel_password,omitempty"`
 }
 
 type ReplSource struct {
-	Host string `json:"host"`
-	Port int    `json:"port"`
-	User string `json:"user"`
-	Pass string `json:"pass"`
+	Host      string `json:"host"`
+	Port      int    `json:"port"`
+	User      string `json:"user"`
+	Pass      string `json:"pass"`
+	PanelPass string `json:"panel_pass,omitempty"`
 }
 
 type Service struct {
@@ -245,10 +249,58 @@ func (s *Service) ValidMachineToken(raw string) error {
 		return fmt.Errorf("缺少机器令牌")
 	}
 	want, _ := s.Settings.Get("ha_machine_token")
-	if want == "" || raw != want {
+	if want == "" {
+		return fmt.Errorf("机器令牌无效")
+	}
+	if subtle.ConstantTimeCompare([]byte(raw), []byte(want)) != 1 {
 		return fmt.Errorf("机器令牌无效")
 	}
 	return nil
+}
+
+func (s *Service) SaveRole(role string, peerID int64, term int) error {
+	return s.saveRole(role, peerID, term)
+}
+
+func (s *Service) knownPeerTerm() int {
+	if s.Settings == nil {
+		return 0
+	}
+	v, _ := s.Settings.Get("ha_peer_term")
+	n, _ := strconv.Atoi(v)
+	return n
+}
+
+func (s *Service) adoptPeerTerm(term int) error {
+	if term < 1 {
+		return nil
+	}
+	if s.Settings != nil {
+		_ = s.Settings.Set("ha_peer_term", strconv.Itoa(term))
+	}
+	st, err := s.loadState()
+	if err != nil {
+		return err
+	}
+	if term <= st.Term {
+		return nil
+	}
+	return s.saveRole(st.Role, st.PeerID, term)
+}
+
+func (s *Service) pullAndAdoptTerm(ctx context.Context) error {
+	addr, fp, err := s.peerMeta()
+	if err != nil || s.Migrate == nil {
+		return err
+	}
+	token := s.machineToken()
+	qctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	var view RoleView
+	if err := s.Migrate.GetPeer(qctx, addr, fp, "/ha/peer-role", token, &view); err != nil {
+		return err
+	}
+	return s.adoptPeerTerm(view.Term)
 }
 
 type state struct {

@@ -132,6 +132,9 @@ func (s *Service) syncRound(ctx context.Context, first bool) (string, error) {
 			return "", err
 		}
 	}
+	if err := s.pullAndAdoptTerm(ctx); err != nil {
+		return "", fmt.Errorf("同步任期：%w", err)
+	}
 	return "完成", nil
 }
 
@@ -149,7 +152,7 @@ func (s *Service) rsyncFromPeer(ctx context.Context, addr string) error {
 	if www == "" {
 		www = "/var/www"
 	}
-	if err := pull(www+"/", www+"/"); err != nil {
+	if err := pull(www+"/", www+"/", "--exclude=.lnmp-panel-ha"); err != nil {
 		return fmt.Errorf("站点：%w", err)
 	}
 	if s.SSL != nil && s.SSL.Dir != "" {
@@ -166,6 +169,7 @@ func (s *Service) rsyncFromPeer(ctx context.Context, addr string) error {
 	}
 	acme := filepath.Join(s.Secrets, "acme.key")
 	_ = pull(acme, acme)
+	_ = pull("/etc/mysql/debian.cnf", "/etc/mysql/debian.cnf")
 	return nil
 }
 
@@ -184,6 +188,9 @@ func (s *Service) ensureReplica(ctx context.Context, addr, fp, token string, fir
 	if src.Port <= 0 {
 		src.Port = 3306
 	}
+	if src.PanelPass != "" {
+		_ = s.MySQL.WritePanelCNF(src.PanelPass)
+	}
 	seeded, _ := s.Settings.Get("ha_mysql_seeded")
 	if seeded != "1" {
 		if strings.TrimSpace(s.MySQL.GTIDExecuted(ctx)) == "" {
@@ -196,7 +203,7 @@ func (s *Service) ensureReplica(ctx context.Context, addr, fp, token string, fir
 	if err := s.MySQL.SetupReplica(ctx, src.Host, src.Port, src.User, src.Pass); err != nil {
 		return fmt.Errorf("启动复制：%w", err)
 	}
-	_ = s.MySQL.RestorePanelUser(ctx)
+	_ = s.MySQL.WriteHACNF(mysql.ServerIDFromHost(s.hostname()), false)
 	_ = s.MySQL.SetReadOnly(ctx, true)
 	var st mysql.ReplicaStatus
 	for i := 0; i < 15; i++ {
@@ -217,18 +224,21 @@ func (s *Service) ensureReplica(ctx context.Context, addr, fp, token string, fir
 }
 
 func (s *Service) firstCopy(ctx context.Context, src ReplSource) error {
-	if err := s.MySQL.WriteHACNF(mysql.ServerIDFromHost(s.hostname()), false); err != nil {
+	id := mysql.ServerIDFromHost(s.hostname())
+	if err := s.MySQL.WriteHABaseCNF(id, false); err != nil {
 		return err
 	}
 	if !s.SkipExec {
 		_ = s.MySQL.Restart(ctx)
 	}
+	_ = s.pullDebianCNF(ctx, src.Host)
 	cloneErr := s.MySQL.CloneFrom(ctx, src.Host, src.Port, src.User, src.Pass)
 	up := s.MySQL.EnsureRunning(ctx)
 	if up == nil && (cloneErr == nil || cloneLost(cloneErr)) {
-		_ = s.MySQL.ResetServerUUID(ctx)
-		_ = s.MySQL.RestorePanelUser(ctx)
-		return nil
+		if strings.EqualFold(s.MySQL.GTIDMode(ctx), "ON") {
+			_ = s.MySQL.ResetServerUUID(ctx)
+			return nil
+		}
 	}
 	s.setDetail("clone 不可用，改用全库导出")
 	tmp := "/var/lib/lnmp-panel/tmp"
@@ -254,8 +264,16 @@ func (s *Service) firstCopy(ctx context.Context, src ReplSource) error {
 	if impErr != nil {
 		return fmt.Errorf("导入全库：%w", impErr)
 	}
-	_ = s.MySQL.RestorePanelUser(ctx)
 	return nil
+}
+
+func (s *Service) pullDebianCNF(ctx context.Context, sshHost string) error {
+	if sshHost == "" {
+		return nil
+	}
+	user, port := s.peerSSH()
+	return migrate.RsyncOverSSH(ctx, s.Runner, user+"@"+sshHost+":/etc/mysql/debian.cnf", "/etc/mysql/debian.cnf",
+		s.haKeyPath(), s.haKnownHosts(), port, s.SkipExec)
 }
 
 func (s *Service) dumpPeerMySQL(ctx context.Context, src ReplSource, localPath string) error {

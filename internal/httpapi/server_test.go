@@ -54,7 +54,7 @@ type envlope struct {
 	} `json:"error"`
 }
 
-func startTest(t *testing.T) (base, prefix, password string, client *http.Client, srv *http.Server) {
+func startTest(t *testing.T) (base, prefix, password string, client *http.Client, api *Server) {
 	t.Helper()
 	dir := t.TempDir()
 	db, err := store.Open(filepath.Join(dir, "panel.db"))
@@ -194,7 +194,7 @@ func startTest(t *testing.T) (base, prefix, password string, client *http.Client
 		},
 	}
 	base = "https://" + ln.Addr().String()
-	return base, prefix, password, client, https
+	return base, prefix, password, client, s
 }
 
 func mustCert(t *testing.T, dir string) []tls.Certificate {
@@ -699,6 +699,69 @@ func TestHATokenAPI(t *testing.T) {
 	code, e = doJSON(t, client, "POST", api+"/ha/sync/start", csrf, map[string]any{})
 	if code == 200 && e.OK {
 		t.Fatal("单机不得开始同步")
+	}
+}
+
+func TestStandbyRejectsWrites(t *testing.T) {
+	base, prefix, pass, client, srv := startTest(t)
+	api := base + "/" + prefix + "/api/v1"
+	csrf := loginCSRF(t, client, api, "admin", pass)
+	if err := srv.HA.SaveRole(ha.RoleStandby, 0, 1); err != nil {
+		t.Fatal(err)
+	}
+	code, e := doJSON(t, client, "POST", api+"/sites", csrf, map[string]any{
+		"site_key": "x", "name": "x", "domains": []string{"x.test"},
+	})
+	if code != 409 || e.OK {
+		t.Fatalf("站点写 %d %+v", code, e)
+	}
+	if e.Error == nil || e.Error.Message != "本机为备机，配置由主机同步" {
+		t.Fatalf("文案 %+v", e.Error)
+	}
+	code, e = doJSON(t, client, "POST", api+"/mysql/databases", csrf, map[string]any{"name": "db1"})
+	if code != 409 {
+		t.Fatalf("mysql %d %+v", code, e)
+	}
+	code, e = doJSON(t, client, "POST", api+"/cron", csrf, map[string]any{
+		"name": "n", "schedule": "* * * * *", "command": "/usr/bin/true",
+	})
+	if code != 409 {
+		t.Fatalf("cron %d %+v", code, e)
+	}
+	code, e = doJSON(t, client, "POST", api+"/php/versions/8.3/extensions", csrf, map[string]any{"name": "xdebug"})
+	if code != 409 {
+		t.Fatalf("php %d %+v", code, e)
+	}
+	code, e = doJSON(t, client, "GET", api+"/sites", csrf, nil)
+	if code != 200 || !e.OK {
+		t.Fatalf("GET sites 应仍可用 %d %+v", code, e)
+	}
+	code, e = doJSONH(t, client, "POST", api+"/ha/peer/step-down", "", map[string]string{"token": "nope"}, nil)
+	if code != 401 {
+		t.Fatalf("step-down 无令牌 %d %+v", code, e)
+	}
+}
+
+func TestPeerStepDown(t *testing.T) {
+	base, prefix, pass, client, srv := startTest(t)
+	api := base + "/" + prefix + "/api/v1"
+	_ = loginCSRF(t, client, api, "admin", pass)
+	if err := srv.HA.SaveRole(ha.RoleMaster, 0, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.Settings.Set("ha_machine_token", "tok-step-down"); err != nil {
+		t.Fatal(err)
+	}
+	code, e := doJSONH(t, client, "POST", api+"/ha/peer/step-down", "", map[string]string{"token": "tok-step-down"}, nil)
+	if code != 200 || !e.OK {
+		t.Fatalf("step-down %d %+v", code, e)
+	}
+	st, err := srv.HA.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.Degraded || st.Role != ha.RoleMaster {
+		t.Fatalf("step-down 后 %+v", st)
 	}
 }
 

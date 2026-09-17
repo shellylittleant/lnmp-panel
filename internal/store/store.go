@@ -25,7 +25,7 @@ func Open(path string) (*DB, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return nil, err
 	}
-	sqlDB, err := sql.Open("sqlite", path)
+	sqlDB, err := sql.Open("sqlite", sqliteDSN(path))
 	if err != nil {
 		return nil, err
 	}
@@ -37,11 +37,15 @@ func OpenConns(path string, maxOpen int) (*DB, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return nil, err
 	}
-	sqlDB, err := sql.Open("sqlite", path)
+	sqlDB, err := sql.Open("sqlite", sqliteDSN(path))
 	if err != nil {
 		return nil, err
 	}
 	return finishOpen(sqlDB, path, maxOpen)
+}
+
+func sqliteDSN(path string) string {
+	return "file:" + filepath.ToSlash(path) + "?_pragma=busy_timeout(15000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)"
 }
 
 func finishOpen(sqlDB *sql.DB, path string, maxOpen int) (*DB, error) {
@@ -52,16 +56,6 @@ func finishOpen(sqlDB *sql.DB, path string, maxOpen int) (*DB, error) {
 	if err := sqlDB.Ping(); err != nil {
 		_ = sqlDB.Close()
 		return nil, err
-	}
-	for _, p := range []string{
-		`PRAGMA foreign_keys = ON`,
-		`PRAGMA journal_mode = WAL`,
-		`PRAGMA busy_timeout = 15000`,
-	} {
-		if _, err := sqlDB.Exec(p); err != nil {
-			_ = sqlDB.Close()
-			return nil, err
-		}
 	}
 	if err := os.Chmod(path, 0600); err != nil && !os.IsNotExist(err) {
 		_ = sqlDB.Close()

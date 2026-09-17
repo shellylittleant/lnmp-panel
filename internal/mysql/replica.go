@@ -6,6 +6,7 @@ import (
 	"hash/crc32"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -36,6 +37,15 @@ func ServerIDFromHost(host string) int {
 }
 
 func (s *Service) WriteHACNF(serverID int, asMaster bool) error {
+	return s.writeHACNF(serverID, asMaster, !asMaster)
+}
+
+// WriteHABaseCNF 写 GTID/server-id，不落只读。首次导入全库前必须可写。
+func (s *Service) WriteHABaseCNF(serverID int, asMaster bool) error {
+	return s.writeHACNF(serverID, asMaster, false)
+}
+
+func (s *Service) writeHACNF(serverID int, asMaster, persistRO bool) error {
 	if serverID <= 0 {
 		serverID = 1001
 	}
@@ -51,6 +61,9 @@ log_bin = mysql-bin
 binlog_format = ROW
 bind-address = %s
 `, serverID, bind)
+	if persistRO {
+		body += "read_only = ON\nsuper_read_only = ON\n"
+	}
 	if err := panelFS.Mkdir("/etc/mysql/mysql.conf.d", 0755); err != nil {
 		return err
 	}
@@ -162,6 +175,18 @@ func parseShowG(raw string) map[string]string {
 	return out
 }
 
+func (s *Service) GTIDMode(ctx context.Context) string {
+	out, err := s.Exec(ctx, "SELECT @@GLOBAL.GTID_MODE")
+	if err != nil {
+		out, _ = s.execRoot(ctx, "SELECT @@GLOBAL.GTID_MODE")
+	}
+	v := strings.TrimSpace(out)
+	if i := strings.LastIndex(v, "\n"); i >= 0 {
+		v = strings.TrimSpace(v[i+1:])
+	}
+	return v
+}
+
 func (s *Service) GTIDExecuted(ctx context.Context) string {
 	out, err := s.Exec(ctx, "SELECT @@GLOBAL.GTID_EXECUTED")
 	if err != nil {
@@ -171,7 +196,7 @@ func (s *Service) GTIDExecuted(ctx context.Context) string {
 	if i := strings.LastIndex(v, "\n"); i >= 0 {
 		v = strings.TrimSpace(v[i+1:])
 	}
-	if v == "" || strings.Contains(v, "GTID_EXECUTED") {
+	if v == "" || strings.Contains(v, "GTID_EXECUTED") || strings.HasPrefix(v, "+") {
 		return ""
 	}
 	return v
@@ -191,18 +216,25 @@ func (s *Service) SetupReplica(ctx context.Context, host string, port int, user,
 		return err
 	}
 	stmt := fmt.Sprintf(
-		"STOP REPLICA; RESET REPLICA ALL; CHANGE REPLICATION SOURCE TO SOURCE_HOST=%s, SOURCE_PORT=%d, SOURCE_USER=%s, SOURCE_PASSWORD=%s, SOURCE_AUTO_POSITION=1, GET_SOURCE_PUBLIC_KEY=1; START REPLICA;",
+		"STOP REPLICA; RESET REPLICA ALL; CHANGE REPLICATION SOURCE TO SOURCE_HOST=%s, SOURCE_PORT=%d, SOURCE_USER=%s, SOURCE_PASSWORD=%s, SOURCE_AUTO_POSITION=1, GET_SOURCE_PUBLIC_KEY=1, SOURCE_SSL=1; START REPLICA;",
 		quoteSQL(host), port, quoteSQL(user), quoteSQL(pass),
 	)
-	if _, err := s.Exec(ctx, stmt); err != nil {
+	if err := s.execOrRoot(ctx, stmt); err != nil {
 		stmt = fmt.Sprintf(
-			"STOP SLAVE; RESET SLAVE ALL; CHANGE MASTER TO MASTER_HOST=%s, MASTER_PORT=%d, MASTER_USER=%s, MASTER_PASSWORD=%s, MASTER_AUTO_POSITION=1, GET_MASTER_PUBLIC_KEY=1; START SLAVE;",
+			"STOP SLAVE; RESET SLAVE ALL; CHANGE MASTER TO MASTER_HOST=%s, MASTER_PORT=%d, MASTER_USER=%s, MASTER_PASSWORD=%s, MASTER_AUTO_POSITION=1, GET_MASTER_PUBLIC_KEY=1, MASTER_SSL=1; START SLAVE;",
 			quoteSQL(host), port, quoteSQL(user), quoteSQL(pass),
 		)
-		_, err = s.Exec(ctx, stmt)
-		return err
+		return s.execOrRoot(ctx, stmt)
 	}
 	return nil
+}
+
+func (s *Service) execOrRoot(ctx context.Context, sqlText string) error {
+	if _, err := s.Exec(ctx, sqlText); err == nil {
+		return nil
+	}
+	_, err := s.execRoot(ctx, sqlText)
+	return err
 }
 
 func (s *Service) CloneFrom(ctx context.Context, host string, port int, user, pass string) error {
@@ -218,14 +250,17 @@ func (s *Service) CloneFrom(ctx context.Context, host string, port int, user, pa
 	if err := ValidIdent(user); err != nil {
 		return err
 	}
-	_, _ = s.Exec(ctx, "INSTALL PLUGIN clone SONAME 'mysql_clone.so';")
+	_ = s.execOrRoot(ctx, "INSTALL PLUGIN clone SONAME 'mysql_clone.so';")
 	donor := fmt.Sprintf("%s:%d", host, port)
-	if _, err := s.Exec(ctx, "SET GLOBAL clone_valid_donor_list="+quoteSQL(donor)); err != nil {
+	if err := s.execOrRoot(ctx, "SET GLOBAL clone_valid_donor_list="+quoteSQL(donor)); err != nil {
 		return err
 	}
 	stmt := fmt.Sprintf("CLONE INSTANCE FROM %s@%s:%d IDENTIFIED BY %s;", quoteSQL(user), host, port, quoteSQL(pass))
-	_, err := s.execLong(ctx, 30*time.Minute, stmt)
-	return err
+	if _, err := s.execLong(ctx, 30*time.Minute, stmt); err != nil {
+		_, err = s.execRoot(ctx, stmt)
+		return err
+	}
+	return nil
 }
 
 func (s *Service) DumpAllForReplica(ctx context.Context, w io.Writer) error {
@@ -318,7 +353,7 @@ func (s *Service) execRoot(ctx context.Context, sqlText string) (string, error) 
 	if s.SkipExec && s.IORunner == nil {
 		return "", nil
 	}
-	r, err := s.runIO()(ctx, 20*time.Second, strings.NewReader(sqlText), "/usr/bin/mysql", "-uroot")
+	r, err := s.runIO()(ctx, 20*time.Second, strings.NewReader(sqlText), "/usr/bin/mysql", "-uroot", "-N", "-B")
 	if s.SkipExec {
 		return r.Stdout, nil
 	}
@@ -326,6 +361,25 @@ func (s *Service) execRoot(ctx context.Context, sqlText string) (string, error) 
 		return "", fmt.Errorf("mysql root：%s", exec.Clip(r.Stderr+" "+r.Stdout))
 	}
 	return r.Stdout, nil
+}
+
+func (s *Service) PanelPassword() string {
+	return s.clientPassword()
+}
+
+func (s *Service) WritePanelCNF(pass string) error {
+	if strings.TrimSpace(pass) == "" {
+		return fmt.Errorf("面板密码为空")
+	}
+	if err := panelFS.Mkdir(filepath.Dir(s.Defaults), 0700); err != nil {
+		return err
+	}
+	sock := s.Socket
+	if sock == "" {
+		sock = "/var/run/mysqld/mysqld.sock"
+	}
+	body := fmt.Sprintf("[client]\nuser=lnmp_panel\npassword=%q\nsocket=%s\n", pass, sock)
+	return panelFS.WriteAtomic(s.Defaults, []byte(body), 0600)
 }
 
 func (s *Service) clientPassword() string {

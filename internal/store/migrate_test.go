@@ -1,7 +1,10 @@
 package store
 
 import (
+	"context"
+	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -15,6 +18,46 @@ func TestBusyTimeoutIs15s(t *testing.T) {
 	var n int
 	if err := db.SQL.QueryRow(`PRAGMA busy_timeout`).Scan(&n); err != nil || n != 15000 {
 		t.Fatalf("busy_timeout=%d %v", n, err)
+	}
+}
+
+func TestSQLiteDSNHasPragmas(t *testing.T) {
+	d := sqliteDSN("/tmp/x.db")
+	if !strings.Contains(d, "_pragma=busy_timeout(15000)") || !strings.Contains(d, "_pragma=journal_mode(WAL)") {
+		t.Fatalf("DSN %s", d)
+	}
+}
+
+func TestBusyTimeoutOnPooledConns(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(filepath.Join(dir, "panel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	conns := make([]*sql.Conn, 0, 4)
+	for i := 0; i < 4; i++ {
+		c, err := db.SQL.Conn(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		conns = append(conns, c)
+	}
+	defer func() {
+		for _, c := range conns {
+			_ = c.Close()
+		}
+	}()
+	for i, c := range conns {
+		var n int
+		var mode string
+		if err := c.QueryRowContext(ctx, `PRAGMA busy_timeout`).Scan(&n); err != nil || n != 15000 {
+			t.Fatalf("conn %d busy_timeout=%d %v", i, n, err)
+		}
+		if err := c.QueryRowContext(ctx, `PRAGMA journal_mode`).Scan(&mode); err != nil || !strings.EqualFold(mode, "wal") {
+			t.Fatalf("conn %d journal_mode=%s %v", i, mode, err)
+		}
 	}
 }
 

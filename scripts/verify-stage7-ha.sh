@@ -97,6 +97,58 @@ echo "CSRFA_LEN=${#CSRFA} CSRFB_LEN=${#CSRFB}"
 test "${#CSRFA}" -gt 10
 test "${#CSRFB}" -gt 10
 
+ha_term() { printf '%s' "$1" | sed -n 's/.*"term":\([0-9][0-9]*\).*/\1/p'; }
+ha_role() { printf '%s' "$1" | sed -n 's/.*"role":"\([^"]*\)".*/\1/p'; }
+ha_degraded() { printf '%s' "$1" | sed -n 's/.*"degraded":\([^,}]*\).*/\1/p'; }
+
+ha_status() {
+  local name="$1" pfx="$2" port="$3" cj="$4"
+  docker exec "$name" bash -c "curl -sk -c $cj -b $cj https://127.0.0.1:${port}/${pfx}/api/v1/ha/status"
+}
+
+panel_ping_out() {
+  docker exec "$1" mysqladmin --defaults-extra-file=/var/lib/lnmp-panel/secrets/mysql-panel.cnf ping 2>&1 || true
+}
+
+sro() {
+  docker exec "$1" mysql --defaults-extra-file=/var/lib/lnmp-panel/secrets/mysql-panel.cnf -N -e "SELECT @@GLOBAL.super_read_only" 2>/dev/null || echo '?'
+}
+
+assert_panel_ping_both() {
+  local a b
+  a=$(panel_ping_out "$A")
+  b=$(panel_ping_out "$B")
+  echo "PANEL_PING_A=$a"
+  echo "PANEL_PING_B=$b"
+  echo "$a" | grep -qi alive || { echo PANEL_PING_A_FAIL; exit 1; }
+  echo "$b" | grep -qi alive || { echo PANEL_PING_B_FAIL; exit 1; }
+}
+
+print_ha() {
+  local tag="$1"
+  local STA STB
+  STA=$(ha_status "$A" "$PFXA" "$PORTA" /tmp/cja)
+  STB=$(ha_status "$B" "$PFXB" "$PORTB" /tmp/cjb)
+  echo "HA[$tag] A role=$(ha_role "$STA") term=$(ha_term "$STA") degraded=$(ha_degraded "$STA") sro=$(sro "$A") ping=$(panel_ping_out "$A" | tr '\n' ' ')"
+  echo "HA[$tag] B role=$(ha_role "$STB") term=$(ha_term "$STB") degraded=$(ha_degraded "$STB") sro=$(sro "$B") ping=$(panel_ping_out "$B" | tr '\n' ' ')"
+}
+
+wait_term_ge() {
+  local name="$1" pfx="$2" port="$3" cj="$4" want="$5"
+  local i ST t
+  for i in $(seq 1 30); do
+    ST=$(ha_status "$name" "$pfx" "$port" "$cj")
+    t=$(ha_term "$ST")
+    echo "WAIT_TERM $name $i term=$t want>=$want $ST"
+    if [ -n "$t" ] && [ "$t" -ge "$want" ]; then
+      return 0
+    fi
+    sleep 2
+  done
+  echo TERM_NOT_ADOPTED "$name" want="$want"
+  return 1
+}
+
 wait_job() {
   local name="$1" pfx="$2" port="$3" cj="$4" jid="$5"
   for i in $(seq 1 180); do
@@ -171,6 +223,7 @@ echo "STATUS_B=$STB"
 echo "$STA" | grep -q '"role":"master"' || { echo A_NOT_MASTER; exit 1; }
 echo "$STB" | grep -q '"role":"standby"' || { echo B_NOT_STANDBY; exit 1; }
 docker exec "$B" test -L /etc/nginx/sites-enabled/nginx_catchall_404.conf
+print_ha after_pair
 echo ROLE_OK
 
 SYNC=$(docker exec "$B" bash -c "
@@ -265,6 +318,12 @@ echo "$STB" | grep -q '"role":"master"' || { echo B_PROMOTE_NOT_MASTER; exit 1; 
 HTTPB=$(docker exec "$B" bash -c "curl -sS -o /tmp/bbody -w '%{http_code}' -H 'Host: demo.test' http://127.0.0.1/ || echo 000")
 echo "B_SITE_HTTP=$HTTPB"
 echo "$HTTPB" | grep -q 200 || { echo B_SITE_NOT_200; cat /tmp/bbody; docker exec "$B" ls -l /etc/nginx/sites-enabled; exit 1; }
+TERM_B1=$(ha_term "$STB")
+echo "TERM_B_AFTER_PROM1=$TERM_B1"
+test -n "$TERM_B1"
+test "$TERM_B1" -ge 2 || { echo TERM_NOT_INCREMENTED_R1; exit 1; }
+assert_panel_ping_both
+print_ha after_promote1
 echo PROMOTE_OK
 
 if ! docker exec "$B" mysql --defaults-extra-file=/var/lib/lnmp-panel/secrets/mysql-panel.cnf -e "UPDATE hadb.mark SET v='from-b-master' WHERE id=1;"; then
@@ -291,6 +350,8 @@ if docker exec "$A" mysql --defaults-extra-file=/var/lib/lnmp-panel/secrets/mysq
   cat /tmp/ro.err || true
   exit 1
 fi
+assert_panel_ping_both
+print_ha after_self_protect1
 echo SELF_PROTECT_OK
 
 DEM=$(docker exec "$A" bash -c "
@@ -346,5 +407,48 @@ PR=$(docker exec "$A" bash -c "
 ")
 echo "PEER_ROLE=$PR"
 echo "$PR" | grep -q '"role":"master"' || { echo PEER_ROLE_FAIL; exit 1; }
+
+print_ha after_catchup3
+assert_panel_ping_both
+STA=$(ha_status "$A" "$PFXA" "$PORTA" /tmp/cja)
+STB=$(ha_status "$B" "$PFXB" "$PORTB" /tmp/cjb)
+TERM_A=$(ha_term "$STA")
+TERM_B=$(ha_term "$STB")
+echo "TERM_AFTER_R1 A=$TERM_A B=$TERM_B"
+test -n "$TERM_B"
+wait_term_ge "$A" "$PFXA" "$PORTA" /tmp/cja "$TERM_B"
+STA=$(ha_status "$A" "$PFXA" "$PORTA" /tmp/cja)
+TERM_A=$(ha_term "$STA")
+echo "TERM_A_ADOPTED=$TERM_A"
+
+# 第二轮完整切换：A 启用主模式，B 重启后必须 degraded。
+PROM2=$(docker exec "$A" bash -c "
+  curl -sk -c /tmp/cja -b /tmp/cja -X POST -H 'Content-Type: application/json' -H 'X-CSRF-Token: $CSRFA' \
+    -d '{}' https://127.0.0.1:${PORTA}/${PFXA}/api/v1/ha/promote
+")
+echo "PROM2=$PROM2"
+echo "$PROM2" | grep -q '"ok":true' || { echo PROMOTE2_FAIL; docker exec "$A" tail -50 /tmp/panel.log; docker exec "$B" tail -30 /tmp/panel.log; exit 1; }
+STA=$(ha_status "$A" "$PFXA" "$PORTA" /tmp/cja)
+echo "STATUS_A_PROM2=$STA"
+echo "$STA" | grep -q '"role":"master"' || { echo A_PROMOTE2_NOT_MASTER; exit 1; }
+TERM_A2=$(ha_term "$STA")
+echo "TERM_A_PROM2=$TERM_A2"
+test -n "$TERM_A2"
+test "$TERM_A2" -gt "$TERM_B" || { echo TERM_NOT_INCREMENTED_R2; exit 1; }
+assert_panel_ping_both
+print_ha after_promote2
+
+echo RESTART_B
+docker exec "$B" bash -c 'killall -TERM lnmp-panel 2>/dev/null || true'
+sleep 3
+wait_https "$B" "$PFXB" "$PORTB"
+CSRFB=$(login "$B" "$PFXB" "$PORTB" /tmp/cjb)
+echo "CSRFB2_LEN=${#CSRFB}"
+STB=$(ha_status "$B" "$PFXB" "$PORTB" /tmp/cjb)
+echo "STATUS_B_AFTER=$STB"
+echo "$STB" | grep -q '"degraded":true' || { echo B_NOT_DEGRADED; docker exec "$B" tail -60 /tmp/panel.log; docker exec "$A" tail -30 /tmp/panel.log; exit 1; }
+assert_panel_ping_both
+print_ha after_self_protect2
+echo SELF_PROTECT2_OK
 
 echo STAGE7_HA_OK

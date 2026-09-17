@@ -17,6 +17,12 @@ func (s *Service) Promote(ctx context.Context) error {
 	if st.Role != RoleStandby {
 		return fmt.Errorf("只有备机可以启用主模式")
 	}
+	s.requestPeerStepDown(ctx)
+	_ = s.pullAndAdoptTerm(ctx)
+	st, err = s.loadState()
+	if err != nil {
+		return err
+	}
 	s.stopSyncLocked()
 	if s.MySQL != nil {
 		_ = s.MySQL.StopReplica(ctx)
@@ -24,14 +30,11 @@ func (s *Service) Promote(ctx context.Context) error {
 		if !s.SkipExec && s.MySQL.Installed() {
 			_ = s.MySQL.Restart(ctx)
 		}
-		if err := s.MySQL.RestorePanelUser(ctx); err != nil {
-			log.Printf("提升为主后恢复面板账号：%v", err)
-		}
 		if err := s.MySQL.SetReadOnly(ctx, false); err != nil {
 			return fmt.Errorf("MySQL 切可写：%w", err)
 		}
 	}
-	term := st.Term + 1
+	term := NextTerm(st.Term, s.knownPeerTerm())
 	if err := s.saveRole(RoleMaster, st.PeerID, term); err != nil {
 		return err
 	}
@@ -43,6 +46,41 @@ func (s *Service) Promote(ctx context.Context) error {
 	_ = s.prepareMasterMySQL(ctx)
 	s.applyHAFirewall(RoleMaster, s.peerIP())
 	s.setDetail("已启用主模式，请人工修改 DNS 指向本机")
+	return nil
+}
+
+func (s *Service) requestPeerStepDown(ctx context.Context) {
+	addr, fp, err := s.peerMeta()
+	if err != nil || s.Migrate == nil {
+		return
+	}
+	token := s.machineToken()
+	qctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	var out map[string]any
+	if err := s.Migrate.PostPeer(qctx, addr, fp, "", "/ha/peer/step-down", map[string]string{"token": token}, &out); err != nil {
+		log.Printf("提升：通知对端降级失败（对端不可达则继续）：%v", err)
+	}
+}
+
+func (s *Service) StepDown(ctx context.Context) error {
+	st, err := s.loadState()
+	if err != nil {
+		return err
+	}
+	if st.Role != RoleMaster {
+		return nil
+	}
+	s.setDegraded(true)
+	if s.MySQL != nil {
+		if err := s.MySQL.SetReadOnly(ctx, true); err != nil {
+			log.Printf("对端要求降级：MySQL 只读失败：%v", err)
+		}
+	}
+	if err := s.applyNginxMaintenance(); err != nil {
+		log.Printf("对端要求降级：维护页失败：%v", err)
+	}
+	s.setDetail("对端正在启用主模式，本机已只读并挂维护页，请将本机设为备机")
 	return nil
 }
 

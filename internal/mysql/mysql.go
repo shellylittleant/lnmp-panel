@@ -456,16 +456,27 @@ func tailLines(path string, n int) string {
 	return out
 }
 
+func (s *Service) alive(ctx context.Context) bool {
+	if s.admin(ctx, "ping") == nil {
+		return true
+	}
+	_, err := s.execRoot(ctx, "SELECT 1")
+	return err == nil
+}
+
 func (s *Service) waitReady(ctx context.Context) error {
 	if s.SkipExec {
 		return nil
 	}
 	var last error
 	for i := 0; i < 40; i++ {
-		if err := s.admin(ctx, "ping"); err == nil {
+		if s.alive(ctx) {
 			return nil
-		} else {
+		}
+		if err := s.admin(ctx, "ping"); err != nil {
 			last = err
+		} else {
+			last = fmt.Errorf("mysql 未就绪")
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
@@ -479,8 +490,13 @@ func (s *Service) admin(ctx context.Context, extra ...string) error {
 	args := s.clientArgs("/usr/bin/mysqladmin")
 	args = append(args, extra...)
 	r, err := s.run()(ctx, 15*time.Second, args...)
-	if err != nil {
-		return fmt.Errorf("mysqladmin：%s", exec.Clip(r.Stderr+" "+r.Stdout))
+	if err == nil {
+		return nil
+	}
+	rootArgs := append([]string{"/usr/bin/mysqladmin", "-uroot"}, extra...)
+	r2, err2 := s.run()(ctx, 15*time.Second, rootArgs...)
+	if err2 != nil {
+		return fmt.Errorf("mysqladmin：%s", exec.Clip(r.Stderr+" "+r.Stdout+" "+r2.Stderr+" "+r2.Stdout))
 	}
 	return nil
 }
@@ -734,7 +750,7 @@ func (s *Service) EnsureRunning(ctx context.Context) error {
 }
 
 func (s *Service) ensureRunning(ctx context.Context) error {
-	if s.admin(ctx, "ping") == nil {
+	if s.alive(ctx) {
 		return nil
 	}
 	if exec.SystemdLive() {

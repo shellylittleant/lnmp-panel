@@ -93,9 +93,14 @@ func (s *Service) Accept(in AcceptIn) (AcceptOut, error) {
 	if s.TLSCert != "" {
 		fp, _ = migrate.FingerprintPEMFile(s.TLSCert)
 	}
+	panelPass := ""
+	if s.MySQL != nil {
+		panelPass = s.MySQL.PanelPassword()
+	}
 	return AcceptOut{
 		SSHUser: user, SSHPort: port, SSHHostKey: hostKey, SSHPub: pub,
 		PeerID: id, Term: term, Role: RoleMaster, MachineToken: token, Fingerprint: fp,
+		PanelPassword: panelPass,
 	}, nil
 }
 
@@ -194,13 +199,16 @@ func (s *Service) Pair(ctx context.Context, in PairIn) error {
 	if err := s.saveRole(RoleStandby, id, term); err != nil {
 		return err
 	}
+	if acc.PanelPassword != "" && s.MySQL != nil {
+		_ = s.MySQL.WritePanelCNF(acc.PanelPassword)
+	}
 	s.setDegraded(false)
 	s.removeDropIns()
 	if err := s.applyNginxCatchall(); err != nil {
 		return fmt.Errorf("备机 404：%w", err)
 	}
 	if s.MySQL != nil {
-		_ = s.MySQL.WriteHACNF(mysql.ServerIDFromHost(s.hostname()), false)
+		_ = s.MySQL.WriteHABaseCNF(mysql.ServerIDFromHost(s.hostname()), false)
 		_ = s.MySQL.SetReadOnly(ctx, true)
 	}
 	s.applyHAFirewall(RoleStandby, s.peerIP())
@@ -238,9 +246,6 @@ func (s *Service) PeerReplSource() (ReplSource, error) {
 	if st.Role != RoleMaster {
 		return ReplSource{}, fmt.Errorf("本机不是主机")
 	}
-	if s.MySQL != nil {
-		_ = s.MySQL.RestorePanelUser(context.Background())
-	}
 	if err := s.prepareMasterMySQL(context.Background()); err != nil {
 		return ReplSource{}, err
 	}
@@ -252,7 +257,11 @@ func (s *Service) PeerReplSource() (ReplSource, error) {
 	if host == "" {
 		host = s.hostname()
 	}
-	return ReplSource{Host: host, Port: 3306, User: "lnmp_repl", Pass: pass}, nil
+	panelPass := ""
+	if s.MySQL != nil {
+		panelPass = s.MySQL.PanelPassword()
+	}
+	return ReplSource{Host: host, Port: 3306, User: "lnmp_repl", Pass: pass, PanelPass: panelPass}, nil
 }
 
 func (s *Service) PeerBundle(ctx context.Context) (migrate.Bundle, error) {

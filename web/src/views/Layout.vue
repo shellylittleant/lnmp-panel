@@ -1,13 +1,15 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { NLayout, NLayoutSider, NLayoutContent, NMenu, NButton, NSpace } from "naive-ui";
+import { NAlert, NLayout, NLayoutSider, NLayoutContent, NMenu, NButton, NSpace } from "naive-ui";
 import type { MenuOption } from "naive-ui";
 import { api, setCsrf } from "../api";
 
 const router = useRouter();
 const route = useRoute();
 const user = ref("");
+const haRole = ref("");
+let haTimer: number | undefined;
 
 const menu: MenuOption[] = [
   { label: "概览", key: "/" },
@@ -35,6 +37,11 @@ const menuValue = computed(() => {
   return p;
 });
 
+async function refreshHA() {
+  const r = await api<{ role: string }>("GET", "/ha/status");
+  if (r.ok) haRole.value = r.data.role;
+}
+
 onMounted(async () => {
   const r = await api<{ username: string; csrf_token: string }>("GET", "/auth/session");
   if (!r.ok) {
@@ -43,6 +50,12 @@ onMounted(async () => {
   }
   user.value = r.data.username;
   setCsrf(r.data.csrf_token);
+  await refreshHA();
+  haTimer = window.setInterval(refreshHA, 5000);
+});
+
+onUnmounted(() => {
+  if (haTimer) clearInterval(haTimer);
 });
 
 async function logout() {
@@ -68,6 +81,9 @@ function go(key: string) {
           <n-button size="small" @click="logout">退出</n-button>
         </n-space>
       </div>
+      <n-alert v-if="haRole === 'standby'" type="warning" :bordered="false" class="ha-banner">
+        本机为备机，配置由主机同步
+      </n-alert>
       <n-layout-content content-style="padding: 20px">
         <router-view />
       </n-layout-content>
@@ -85,5 +101,9 @@ function go(key: string) {
   justify-content: flex-end;
   padding: 10px 16px;
   border-bottom: 1px solid #eee;
+}
+.ha-banner {
+  margin: 0;
+  border-radius: 0;
 }
 </style>
