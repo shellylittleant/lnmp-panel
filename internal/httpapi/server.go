@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"lnmp-panel/internal/audit"
@@ -57,6 +58,9 @@ type Server struct {
 	Migrate   *migrate.Service
 	HA        *ha.Service
 	Plugins   *plugin.Registry
+
+	peerLimOnce sync.Once
+	peerLim     *ipLimiter
 }
 
 func (s *Server) Handler() http.Handler {
@@ -235,7 +239,15 @@ func (s *Server) withSecurity(next http.Handler) http.Handler {
 		w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'")
 		r.Header.Set("X-Request-Id", newID(8))
-		if strings.HasPrefix(r.URL.Path, "/api/v1/migrate/accept") || strings.HasPrefix(r.URL.Path, "/api/v1/migrate/peer/") ||
+		if strings.HasPrefix(r.URL.Path, "/api/v1/migrate/peer/") {
+			if !s.allowMigratePeer(clientIP(r)) {
+				writeErr(w, http.StatusTooManyRequests, "rate_limited", "请求过于频繁")
+				return
+			}
+			next.ServeHTTP(w, r)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/api/v1/migrate/accept") ||
 			strings.HasPrefix(r.URL.Path, "/api/v1/ha/accept") || strings.HasPrefix(r.URL.Path, "/api/v1/ha/peer") ||
 			r.URL.Path == "/api/v1/ha/peer-role" || r.URL.Path == "/api/v1/ha/health" {
 			next.ServeHTTP(w, r)
@@ -296,6 +308,11 @@ func (w *statusWriter) Flush() {
 	if f, ok := w.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
+}
+
+func (s *Server) allowMigratePeer(ip string) bool {
+	s.peerLimOnce.Do(func() { s.peerLim = newIPLimiter() })
+	return s.peerLim.allow(ip, 30, time.Minute)
 }
 
 func (s *Server) requireAuth(h http.HandlerFunc) http.HandlerFunc {

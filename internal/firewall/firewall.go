@@ -63,6 +63,8 @@ type Vars struct {
 	UDPPorts    []int
 	AllowCIDRs  []string
 	PeerCIDRs   []string
+	PeerCIDRv4  []string
+	PeerCIDRv6  []string
 	MySQLPort   int
 	InputPolicy string
 	PublicHTTP  bool
@@ -313,14 +315,9 @@ func (s *Service) ApplyHA(ctx context.Context, role, peerIP string) error {
 		return err
 	}
 	v := s.varsFromForm(f)
-	if ip := strings.TrimSpace(peerIP); ip != "" {
-		if net.ParseIP(ip) != nil && !strings.Contains(ip, "/") {
-			ip += "/32"
-		}
-		v.PeerCIDRs = []string{ip}
-	} else {
-		v.PeerCIDRs = []string{}
-	}
+	v4, v6 := splitPeerCIDR(peerIP)
+	v.PeerCIDRv4, v.PeerCIDRv6 = v4, v6
+	v.PeerCIDRs = append(append([]string{}, v4...), v6...)
 	if role == "master" {
 		v.MySQLPort = 3306
 	}
@@ -743,6 +740,35 @@ func sshProtected(body string, ports []int) bool {
 		}
 	}
 	return false
+}
+
+func splitPeerCIDR(ip string) (v4, v6 []string) {
+	ip = strings.TrimSpace(ip)
+	if ip == "" {
+		return nil, nil
+	}
+	var parsed net.IP
+	if strings.Contains(ip, "/") {
+		host, _, err := net.ParseCIDR(ip)
+		if err != nil {
+			return nil, nil
+		}
+		parsed = host
+	} else {
+		parsed = net.ParseIP(ip)
+		if parsed == nil {
+			return nil, nil
+		}
+		if parsed.To4() != nil {
+			ip += "/32"
+		} else {
+			ip += "/128"
+		}
+	}
+	if parsed.To4() != nil {
+		return []string{ip}, nil
+	}
+	return nil, []string{ip}
 }
 
 func (s *Service) Ban(ip string) error {

@@ -42,6 +42,17 @@ func TestConfineRejectsPanelSecretsAndDB(t *testing.T) {
 	}
 }
 
+func TestConfineAllowsDotDotInFilename(t *testing.T) {
+	root := t.TempDir()
+	got, err := Confine(root, "demo/a..b.txt", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(got) != "a..b.txt" {
+		t.Fatalf("got %s", got)
+	}
+}
+
 func TestConfineAllowsUnderWWW(t *testing.T) {
 	root := t.TempDir()
 	_ = os.MkdirAll(filepath.Join(root, "demo"), 0755)

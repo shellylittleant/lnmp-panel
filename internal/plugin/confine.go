@@ -21,7 +21,7 @@ func Confine(root, rel string, deny []string) (string, error) {
 	if strings.ContainsRune(rel, 0) {
 		return "", ErrTraverse
 	}
-	if strings.Contains(rel, "..") {
+	if hasDotDotSegment(rel) {
 		return "", ErrTraverse
 	}
 	if filepath.IsAbs(rel) || strings.HasPrefix(rel, "~") || strings.Contains(rel, ":") {
@@ -59,6 +59,16 @@ func Confine(root, rel string, deny []string) (string, error) {
 		}
 	}
 	return full, nil
+}
+
+func hasDotDotSegment(rel string) bool {
+	rel = strings.ReplaceAll(rel, "\\", "/")
+	for _, seg := range strings.Split(rel, "/") {
+		if seg == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 func canon(p string) string {

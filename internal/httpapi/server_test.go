@@ -794,6 +794,51 @@ func (p *httpStubPlugin) Pages() []plugin.Page {
 func (p *httpStubPlugin) OnStart(plugin.Context) error { return nil }
 func (p *httpStubPlugin) OnStop(plugin.Context) error  { return nil }
 
+func TestAcceptIgnoresBodyFrom(t *testing.T) {
+	base, prefix, pass, client, srv := startTest(t)
+	api := base + "/" + prefix + "/api/v1"
+	csrf := loginCSRF(t, client, api, "admin", pass)
+	code, e := doJSON(t, client, "POST", api+"/migrate/token", csrf, map[string]any{})
+	if code != 200 || !e.OK {
+		t.Fatalf("token %d %+v", code, e)
+	}
+	var tok map[string]any
+	_ = json.Unmarshal(e.Data, &tok)
+	raw, _ := tok["token"].(string)
+	code, e = doJSON(t, client, "POST", api+"/migrate/accept", "", map[string]any{
+		"token": raw, "ssh_pub": "ssh-ed25519 AAAA forged", "from": "8.8.8.8",
+	})
+	if code != 200 || !e.OK {
+		t.Fatalf("accept %d %+v", code, e)
+	}
+	b, err := os.ReadFile(srv.Migrate.AuthKeys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(b)
+	if strings.Contains(body, "8.8.8.8") {
+		t.Fatalf("不得采用请求体 from：%s", body)
+	}
+	if !strings.Contains(body, "from=\"127.0.0.1\"") && !strings.Contains(body, "from=\"::1\"") {
+		t.Fatalf("应由 RemoteAddr 写入 from=：%s", body)
+	}
+}
+
+func TestMigratePeerRateLimit(t *testing.T) {
+	base, prefix, _, client, _ := startTest(t)
+	api := base + "/" + prefix + "/api/v1"
+	var last int
+	var lastE envlope
+	for i := 0; i < 31; i++ {
+		last, lastE = doJSON(t, client, "POST", api+"/migrate/peer/preflight", "", map[string]any{
+			"token": "deadbeefdeadbeef.0011223344556677", "need_bytes": 1,
+		})
+	}
+	if last != 429 {
+		t.Fatalf("第 31 次应为 429，got %d %+v", last, lastE)
+	}
+}
+
 func TestPluginDisable404(t *testing.T) {
 	plugin.ResetForTest()
 	t.Cleanup(plugin.ResetForTest)

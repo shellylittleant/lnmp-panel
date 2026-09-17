@@ -41,12 +41,17 @@ func setupFX(t *testing.T) (*FX, string) {
 }
 
 func TestFilexferListAndDownload(t *testing.T) {
-	fx, _ := setupFX(t)
+	fx, www := setupFX(t)
+	_ = os.WriteFile(filepath.Join(www, "demo", ".hidden"), []byte("no"), 0644)
+	_ = os.Mkdir(filepath.Join(www, "demo", ".lnmp-panel-ha"), 0755)
 	req := httptest.NewRequest("GET", "/?path=demo", nil)
 	rr := httptest.NewRecorder()
 	fx.handleList(rr, req)
 	if rr.Code != 200 || !strings.Contains(rr.Body.String(), "a.txt") {
 		t.Fatalf("%d %s", rr.Code, rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), ".hidden") || strings.Contains(rr.Body.String(), ".lnmp-panel-ha") {
+		t.Fatalf("点文件应隐藏：%s", rr.Body.String())
 	}
 	req = httptest.NewRequest("GET", "/?path=demo/a.txt", nil)
 	rr = httptest.NewRecorder()

@@ -278,6 +278,9 @@ func TestICMPInOfficialTemplates(t *testing.T) {
 		if !strings.Contains(rec.Content, "login_ban6") {
 			t.Fatalf("%s 缺 login_ban6", name)
 		}
+		if name != "仅本机面板" && !strings.Contains(rec.Content, "peer_ips6") {
+			t.Fatalf("%s 缺 peer_ips6", name)
+		}
 		if !strings.Contains(rec.Content, "ct state invalid drop") {
 			t.Fatalf("%s 缺 invalid drop", name)
 		}
@@ -304,6 +307,24 @@ func TestApplyHAStandbyTemplate(t *testing.T) {
 	body = string(b)
 	if !strings.Contains(body, "mysql-repl") || !strings.Contains(body, "10.8.0.3") {
 		t.Fatalf("主机应放行 3306 给备机：%s", body)
+	}
+}
+
+func TestApplyHAIPv6Peer(t *testing.T) {
+	s := setupFW(t)
+	if err := s.ApplyHA(context.Background(), "master", "2001:db8::9"); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(s.Canonical)
+	body := string(b)
+	if !strings.Contains(body, "peer_ips6") || !strings.Contains(body, "2001:db8::9/128") {
+		t.Fatalf("IPv6 对端应写入 peer_ips6：%s", body)
+	}
+	if !strings.Contains(body, "ip6 saddr @peer_ips6") {
+		t.Fatalf("应有 ip6 放行：%s", body)
+	}
+	if strings.Contains(body, "2001:db8::9/32") {
+		t.Fatal("IPv6 不得写成 /32")
 	}
 }
 

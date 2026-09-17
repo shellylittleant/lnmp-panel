@@ -126,6 +126,9 @@ func (f *FX) handleList(w http.ResponseWriter, r *http.Request) {
 	}
 	var items []entry
 	for _, e := range ents {
+		if strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
 		info, err := e.Info()
 		if err != nil {
 			continue
@@ -138,8 +141,11 @@ func (f *FX) handleList(w http.ResponseWriter, r *http.Request) {
 	writeOK(w, map[string]any{"root": f.root(), "path": rel, "items": items})
 }
 
+const maxUpload = 64 << 20
+
 func (f *FX) handleUpload(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseMultipartForm(64 << 20); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, maxUpload+1<<20)
+	if err := r.ParseMultipartForm(1 << 20); err != nil {
 		writeErr(w, 400, "请用 multipart，字段 file 与 path")
 		return
 	}
@@ -164,21 +170,34 @@ func (f *FX) handleUpload(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err.Error())
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(fh, 64<<20))
+	tmp, err := os.CreateTemp(filepath.Dir(full), ".lnmp-upload-*")
 	if err != nil {
-		writeErr(w, 400, "读取上传失败")
-		return
-	}
-	if err := os.WriteFile(full, body, 0644); err != nil {
 		writeErr(w, 400, err.Error())
 		return
 	}
-	_ = os.Chmod(full, 0644)
+	tmpName := tmp.Name()
+	n, err := io.Copy(tmp, io.LimitReader(fh, maxUpload+1))
+	_ = tmp.Close()
+	if err != nil || n > maxUpload {
+		_ = os.Remove(tmpName)
+		writeErr(w, 400, "读取上传失败")
+		return
+	}
+	if err := os.Chmod(tmpName, 0644); err != nil {
+		_ = os.Remove(tmpName)
+		writeErr(w, 400, err.Error())
+		return
+	}
+	if err := os.Rename(tmpName, full); err != nil {
+		_ = os.Remove(tmpName)
+		writeErr(w, 400, err.Error())
+		return
+	}
 	if err := chownWWWData(full); err != nil {
 		writeErr(w, 400, "上传成功但无法改为 www-data："+err.Error())
 		return
 	}
-	writeOK(w, map[string]any{"path": rel, "size": len(body)})
+	writeOK(w, map[string]any{"path": rel, "size": n})
 }
 
 func (f *FX) handleDownload(w http.ResponseWriter, r *http.Request) {
