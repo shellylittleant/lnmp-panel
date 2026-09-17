@@ -14,7 +14,7 @@ import (
 
 func fileErr(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, files.ErrForbidden):
+	case errors.Is(err, files.ErrForbidden), errors.Is(err, files.ErrContains):
 		writeErr(w, 403, "forbidden", err.Error())
 	case errors.Is(err, files.ErrNotFound):
 		writeErr(w, 404, "not_found", err.Error())
@@ -22,7 +22,7 @@ func fileErr(w http.ResponseWriter, err error) {
 		writeErr(w, 409, "conflict", err.Error())
 	case errors.Is(err, files.ErrRoot), errors.Is(err, files.ErrTooLarge), errors.Is(err, files.ErrUploadTooLarge),
 		errors.Is(err, files.ErrBinary), errors.Is(err, files.ErrZipSlip), errors.Is(err, files.ErrNotDir), errors.Is(err, files.ErrIsDir),
-		errors.Is(err, files.ErrContains), errors.Is(err, files.ErrIntoSelf):
+		errors.Is(err, files.ErrIntoSelf):
 		writeErr(w, 400, "invalid", err.Error())
 	default:
 		writeErr(w, 400, "invalid", err.Error())
@@ -152,16 +152,32 @@ func (s *Server) handleFilesUpload(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "invalid", "缺少文件")
 		return
 	}
+	nfile := 0
+	for _, group := range form.File {
+		nfile += len(group)
+	}
+	if nfile == 0 {
+		writeErr(w, 400, "invalid", "缺少文件")
+		return
+	}
+	asFile, err := s.filesSvc().UploadPathIsFile(dir)
+	if err != nil {
+		fileErr(w, err)
+		return
+	}
+	if asFile && nfile > 1 {
+		writeErr(w, 400, "invalid", "目标是文件，只能上传一个")
+		return
+	}
 	var n int
-	for _, fhs := range form.File {
-		for _, fh := range fhs {
-			dest := filepath.Join(dir, filepath.Base(fh.Filename))
-			abs, err := s.filesSvc().Resolve(dest)
+	for _, group := range form.File {
+		for _, fh := range group {
+			dest, err := s.filesSvc().ResolveUploadDest(dir, fh.Filename)
 			if err != nil {
 				fileErr(w, err)
 				return
 			}
-			if _, err := os.Lstat(abs); err == nil && !confirm {
+			if _, err := os.Lstat(dest); err == nil && !confirm {
 				writeErr(w, 409, "conflict", files.ErrExists.Error())
 				return
 			}
@@ -178,10 +194,6 @@ func (s *Server) handleFilesUpload(w http.ResponseWriter, r *http.Request) {
 			}
 			n++
 		}
-	}
-	if n == 0 {
-		writeErr(w, 400, "invalid", "缺少文件")
-		return
 	}
 	writeOK(w, map[string]any{"count": n})
 }
@@ -208,6 +220,10 @@ func (s *Server) handleFilesZip(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(paths) == 0 {
 		writeErr(w, 400, "invalid", "缺少 path")
+		return
+	}
+	if err := s.filesSvc().CheckZipSources(paths); err != nil {
+		fileErr(w, err)
 		return
 	}
 	name := "download.zip"

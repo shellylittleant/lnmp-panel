@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -395,6 +396,16 @@ func (s *Service) applyBundleEx(ctx context.Context, b Bundle, haPull bool) ([]s
 			_ = s.Settings.Set(k, v)
 		}
 	}
+	usedPHP := map[string]struct{}{}
+	for _, st := range b.Sites {
+		if st.PHPVersion == nil {
+			continue
+		}
+		v := strings.TrimSpace(*st.PHPVersion)
+		if v != "" {
+			usedPHP[v] = struct{}{}
+		}
+	}
 	for _, p := range b.PHP {
 		ext, _ := json.Marshal(p.Extensions)
 		if len(ext) == 0 || string(ext) == "null" {
@@ -403,8 +414,6 @@ func (s *Service) applyBundleEx(ctx context.Context, b Bundle, haPull bool) ([]s
 		installed := 0
 		if s.PHP != nil && s.PHP.BinaryInstalled(p.Version) {
 			installed = 1
-		} else {
-			missing = append(missing, "PHP "+p.Version)
 		}
 		_, _ = s.db.SQL.Exec(`INSERT INTO php_versions(version, installed, extensions) VALUES (?,?,?)
 			ON CONFLICT(version) DO UPDATE SET installed=excluded.installed, extensions=excluded.extensions`,
@@ -419,6 +428,17 @@ func (s *Service) applyBundleEx(ctx context.Context, b Bundle, haPull bool) ([]s
 			_ = panelFS.Mkdir(filepath.Dir(pool), 0755)
 			_ = panelFS.WriteAtomic(pool, []byte(p.Pool), 0644)
 		}
+	}
+	var usedVers []string
+	for v := range usedPHP {
+		usedVers = append(usedVers, v)
+	}
+	sort.Strings(usedVers)
+	for _, v := range usedVers {
+		if s.PHP != nil && s.PHP.BinaryInstalled(v) {
+			continue
+		}
+		missing = append(missing, "PHP "+v)
 	}
 	if !haPull && b.FirewallForm != nil && s.Firewall != nil {
 		if err := s.Firewall.StageMigrated(*b.FirewallForm); err != nil {

@@ -22,8 +22,10 @@ func writeErr(w http.ResponseWriter, status int, code, message string) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": errBody{Code: code, Message: message}})
 }
 
+const jsonBodyLimit = 2 << 20
+
 func readJSON(w http.ResponseWriter, r *http.Request, dst any) error {
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, jsonBodyLimit))
 	dec.DisallowUnknownFields()
 	return dec.Decode(dst)
 }

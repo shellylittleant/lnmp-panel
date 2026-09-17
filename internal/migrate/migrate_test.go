@@ -464,8 +464,25 @@ func TestApplyRecalcPHPInstalledAndMissing(t *testing.T) {
 	if ins != 0 {
 		t.Fatalf("未装二进制不应标已安装：%d", ins)
 	}
-	if strings.Join(miss, ",") == "" || !strings.Contains(strings.Join(miss, ","), "PHP 8.3") {
-		t.Fatalf("missing %v", miss)
+	if strings.Contains(strings.Join(miss, ","), "PHP 8.3") {
+		t.Fatalf("无站点使用不应报缺 PHP 8.3：%v", miss)
+	}
+	php82 := "8.2"
+	miss, err = s.applyBundle(context.Background(), Bundle{
+		PHP: []PHPRow{{Version: "8.2", Installed: true}, {Version: "8.3", Installed: true}},
+		Sites: []SiteRow{
+			{SiteKey: "s1", Name: "s1", Root: filepath.Join(dir, "www", "s1"), PHPVersion: &php82, Enabled: true},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(miss, ",")
+	if !strings.Contains(joined, "PHP 8.2") {
+		t.Fatalf("站点在用的 8.2 应报缺：%v", miss)
+	}
+	if strings.Contains(joined, "PHP 8.3") {
+		t.Fatalf("未使用的 8.3 不应报缺：%v", miss)
 	}
 }
 

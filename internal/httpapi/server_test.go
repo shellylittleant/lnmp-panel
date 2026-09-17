@@ -13,9 +13,11 @@ import (
 	"encoding/pem"
 	"io"
 	"math/big"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/cookiejar"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -866,6 +868,219 @@ func TestFilesListAndForbidden(t *testing.T) {
 	if code != 400 {
 		t.Fatalf("删根 %d %+v", code, e)
 	}
+}
+
+func TestFilesZipProtectedAndParent(t *testing.T) {
+	base, prefix, pass, client, srv := startTest(t)
+	api := base + "/" + prefix + "/api/v1"
+	csrf := loginCSRF(t, client, api, "admin", pass)
+	_ = os.MkdirAll(srv.Files.Secrets, 0700)
+	_ = os.MkdirAll(filepath.Dir(srv.Files.PanelKey), 0700)
+	_ = os.WriteFile(srv.Files.PanelKey, []byte("KEY"), 0600)
+	www := srv.Files.WWW
+	_ = os.MkdirAll(filepath.Join(www, "demo"), 0755)
+	_ = os.WriteFile(filepath.Join(www, "demo", "a.txt"), []byte("hi"), 0644)
+
+	getZip := func(p string) (int, []byte, envlope) {
+		t.Helper()
+		req, err := http.NewRequest("GET", api+"/files/zip?path="+url.QueryEscape(p), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("X-CSRF-Token", csrf)
+		res, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		b, _ := io.ReadAll(res.Body)
+		var e envlope
+		if len(b) > 0 && b[0] == '{' {
+			_ = json.Unmarshal(b, &e)
+		}
+		return res.StatusCode, b, e
+	}
+
+	code, body, e := getZip(srv.Files.DataDir)
+	if code != 403 || e.Error == nil || e.Error.Message != files.ErrContains.Error() {
+		t.Fatalf("打包父目录 %d %+v %q", code, e, body)
+	}
+	if len(body) > 0 && body[0] == 'P' {
+		t.Fatal("父目录不得返回 zip")
+	}
+	code, body, e = getZip(filepath.Join(srv.Files.DataDir, "panel.db"))
+	if code != 403 || e.Error == nil || e.Error.Message != files.ErrForbidden.Error() {
+		t.Fatalf("打包 panel.db %d %+v", code, e)
+	}
+	code, body, e = getZip(srv.Files.Secrets)
+	if code != 403 {
+		t.Fatalf("打包 secrets %d %+v", code, e)
+	}
+	code, body, e = getZip(srv.Files.PanelKey)
+	if code != 403 {
+		t.Fatalf("打包 panel.key %d %+v", code, e)
+	}
+	code, body, e = getZip(filepath.Join(www, "demo"))
+	if code != 200 || len(body) == 0 || body[0] != 'P' {
+		t.Fatalf("普通目录 zip %d len=%d", code, len(body))
+	}
+}
+
+func TestFilesListLockedFlag(t *testing.T) {
+	base, prefix, pass, client, srv := startTest(t)
+	api := base + "/" + prefix + "/api/v1"
+	csrf := loginCSRF(t, client, api, "admin", pass)
+	_ = os.MkdirAll(srv.Files.Secrets, 0700)
+	code, e := doJSON(t, client, "GET", api+"/files/list?path="+url.QueryEscape(srv.Files.DataDir), csrf, nil)
+	if code != 200 || !e.OK {
+		t.Fatalf("list data %d %+v", code, e)
+	}
+	var data struct {
+		Items []struct {
+			Name   string `json:"name"`
+			Locked bool   `json:"locked"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(e.Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	var sawDB, sawSec bool
+	for _, it := range data.Items {
+		if it.Name == "panel.db" {
+			sawDB = true
+			if !it.Locked {
+				t.Fatal("panel.db 应 locked")
+			}
+		}
+		if it.Name == filepath.Base(srv.Files.Secrets) {
+			sawSec = true
+			if !it.Locked {
+				t.Fatal("secrets 应 locked")
+			}
+		}
+	}
+	if !sawDB || !sawSec {
+		t.Fatalf("应显示例外名：%+v", data.Items)
+	}
+}
+
+func TestFilesUploadDestFile(t *testing.T) {
+	base, prefix, pass, client, srv := startTest(t)
+	api := base + "/" + prefix + "/api/v1"
+	csrf := loginCSRF(t, client, api, "admin", pass)
+	dir := filepath.Join(srv.Files.WWW, "demo")
+	_ = os.MkdirAll(dir, 0755)
+	existing := filepath.Join(dir, "a.txt")
+	_ = os.WriteFile(existing, []byte("old"), 0644)
+
+	code, e := doUpload(t, client, api+"/files/upload", csrf, existing, "other.bin", "NEW", false)
+	if code != 409 {
+		t.Fatalf("覆盖未确认 %d %+v", code, e)
+	}
+	b, _ := os.ReadFile(existing)
+	if string(b) != "old" {
+		t.Fatal("未确认不得覆盖")
+	}
+	code, e = doUpload(t, client, api+"/files/upload", csrf, existing, "other.bin", "NEW", true)
+	if code != 200 || !e.OK {
+		t.Fatalf("确认覆盖 %d %+v", code, e)
+	}
+	b, _ = os.ReadFile(existing)
+	if string(b) != "NEW" {
+		t.Fatalf("应写成目标文件：%s", b)
+	}
+	if _, err := os.Stat(filepath.Join(existing, "other.bin")); err == nil {
+		t.Fatal("不得把文件路径建成目录")
+	}
+	missing := filepath.Join(dir, "fresh.txt")
+	code, e = doUpload(t, client, api+"/files/upload", csrf, missing, "x.bin", "Z", false)
+	if code != 200 {
+		t.Fatalf("不存在带扩展名 %d %+v", code, e)
+	}
+	b, _ = os.ReadFile(missing)
+	if string(b) != "Z" {
+		t.Fatalf("应按文件路径写入：%s", b)
+	}
+	code, e = doUpload(t, client, api+"/files/upload", csrf, dir, "in-dir.txt", "D", false)
+	if code != 200 {
+		t.Fatalf("目录上传 %d %+v", code, e)
+	}
+	b, _ = os.ReadFile(filepath.Join(dir, "in-dir.txt"))
+	if string(b) != "D" {
+		t.Fatalf("目录内：%s", b)
+	}
+}
+
+func TestFilesWriteJSONBodyLimit(t *testing.T) {
+	base, prefix, pass, client, srv := startTest(t)
+	api := base + "/" + prefix + "/api/v1"
+	csrf := loginCSRF(t, client, api, "admin", pass)
+	p := filepath.Join(srv.Files.WWW, "demo", "e.txt")
+	_ = os.MkdirAll(filepath.Dir(p), 0755)
+	_ = os.WriteFile(p, []byte("ok"), 0644)
+
+	big := strings.Repeat("x", files.MaxEdit+512*1024)
+	code, e := doJSON(t, client, "PUT", api+"/files/write", csrf, map[string]any{"path": p, "content": big})
+	if code != 400 || e.Error == nil || e.Error.Message != files.ErrTooLarge.Error() {
+		t.Fatalf("1.5MB content 应走内容上限：%d %+v", code, e)
+	}
+	okc := strings.Repeat("y", files.MaxEdit)
+	code, e = doJSON(t, client, "PUT", api+"/files/write", csrf, map[string]any{"path": p, "content": okc})
+	if code != 200 || !e.OK {
+		t.Fatalf("1MB 应保存：%d %+v", code, e)
+	}
+	req, err := http.NewRequest("PUT", api+"/files/write", bytes.NewReader(bytes.Repeat([]byte("x"), jsonBodyLimit+64)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	res, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	raw, _ := io.ReadAll(res.Body)
+	var over envlope
+	_ = json.Unmarshal(raw, &over)
+	if res.StatusCode != 400 || over.Error == nil || over.Error.Message != "请求格式错误" {
+		t.Fatalf("超 2MB 请求体：%d %s", res.StatusCode, raw)
+	}
+}
+
+func doUpload(t *testing.T, client *http.Client, u, csrf, path, filename, content string, confirm bool) (int, envlope) {
+	t.Helper()
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("path", path)
+	if confirm {
+		_ = mw.WriteField("confirm", "true")
+	}
+	fw, err := mw.CreateFormFile("file", filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.WriteString(fw, content)
+	if err := mw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest("POST", u, &buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("X-CSRF-Token", csrf)
+	res, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	b, _ := io.ReadAll(res.Body)
+	var e envlope
+	if len(b) > 0 && b[0] == '{' {
+		_ = json.Unmarshal(b, &e)
+	}
+	return res.StatusCode, e
 }
 
 func TestPluginDisable404(t *testing.T) {

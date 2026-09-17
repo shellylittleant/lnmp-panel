@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, h, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
   NAlert,
@@ -20,7 +20,7 @@ import type { DataTableColumns, UploadFileInfo } from "naive-ui";
 import { api, apiForm, panelPrefix } from "../api";
 import FileEditor from "./FileEditor.vue";
 
-type Entry = { name: string; path: string; dir: boolean; size: number; mode: string; owner: string; group: string; mtime: string };
+type Entry = { name: string; path: string; dir: boolean; size: number; mode: string; owner: string; group: string; mtime: string; locked?: boolean };
 const msg = useMessage();
 const route = useRoute();
 const router = useRouter();
@@ -48,14 +48,24 @@ const chmodRec = ref(false);
 const warn777 = computed(() => chmodMode.value.replace(/^0+/, "") === "777" || chmodOwner.value === "root");
 
 const columns: DataTableColumns<Entry> = [
-  { type: "selection" },
-  { title: "名称", key: "name" },
+  { type: "selection", disabled: (row: Entry) => !!row.locked },
+  {
+    title: "名称",
+    key: "name",
+    render(row) {
+      if (row.locked) {
+        return h("span", { title: "面板自身文件，请走 SSH" }, ["🔒 ", row.name]);
+      }
+      return row.name;
+    },
+  },
   { title: "大小", key: "size", width: 100 },
   { title: "权限", key: "mode", width: 80 },
   { title: "属主", key: "owner", width: 100 },
   { title: "属组", key: "group", width: 100 },
   { title: "修改时间", key: "mtime", width: 180 },
 ];
+const hasLocked = computed(() => checked.value.some((x) => x.locked));
 
 const crumbs = computed(() => {
   const p = path.value.replace(/\/+$/, "") || "/";
@@ -129,8 +139,16 @@ async function createFile() {
   await load();
 }
 
+function rejectLocked() {
+  if (hasLocked.value) {
+    msg.warning("面板自身文件，请走 SSH");
+    return true;
+  }
+  return false;
+}
+
 async function del() {
-  if (!checked.value.length) return;
+  if (!checked.value.length || rejectLocked()) return;
   ask("确认删除选中的 " + checked.value.length + " 项？不可恢复。", async () => {
     const r = await api("POST", "/files/delete", { paths: checked.value.map((x) => x.path), confirm: true });
     if (!r.ok) msg.error(r.error.message);
@@ -142,6 +160,7 @@ async function del() {
 }
 
 async function copyMove(copy: boolean) {
+  if (rejectLocked()) return;
   if (checked.value.length !== 1 || !destPath.value) {
     msg.error("请选一项并填写目标路径");
     return;
@@ -164,6 +183,7 @@ async function copyMove(copy: boolean) {
 }
 
 async function unzip() {
+  if (rejectLocked()) return;
   if (checked.value.length !== 1) {
     msg.error("请选一个压缩包");
     return;
@@ -179,7 +199,7 @@ async function unzip() {
 }
 
 async function compress() {
-  if (!checked.value.length) return;
+  if (!checked.value.length || rejectLocked()) return;
   const dest = path.value.replace(/\/+$/, "") + "/archive.zip";
   const r = await api("POST", "/files/compress", { paths: checked.value.map((x) => x.path), dest });
   if (!r.ok) msg.error(r.error.message);
@@ -190,6 +210,7 @@ async function compress() {
 }
 
 async function openEdit() {
+  if (rejectLocked()) return;
   if (checked.value.length !== 1 || checked.value[0].dir) {
     msg.error("请选一个文件");
     return;
@@ -216,7 +237,7 @@ async function saveEdit() {
 }
 
 async function doChmod() {
-  if (!checked.value.length) return;
+  if (!checked.value.length || rejectLocked()) return;
   ask(warn777.value ? "将设为 777 或属主 root，确认继续？" : "确认修改权限？", async () => {
     for (const it of checked.value) {
       const r = await api("POST", "/files/chmod", {
@@ -238,6 +259,7 @@ async function doChmod() {
 }
 
 function downloadSel() {
+  if (rejectLocked()) return;
   if (checked.value.length !== 1) {
     msg.error("请选一项下载");
     return;
@@ -250,15 +272,19 @@ function downloadSel() {
   window.open(url, "_blank");
 }
 
-async function onUpload(files: UploadFileInfo[]) {
+async function onUpload(files: UploadFileInfo[], confirm = false) {
   if (!files.length) return;
   const form = new FormData();
   form.append("path", path.value);
-  form.append("confirm", "true");
+  form.append("confirm", confirm ? "true" : "false");
   for (const f of files) {
     if (f.file) form.append("file", f.file);
   }
   const r = await apiForm("/files/upload", form);
+  if (!r.ok && r.error.message.includes("确认覆盖")) {
+    ask("目标已存在，确认覆盖？", () => onUpload(files, true));
+    return;
+  }
   if (!r.ok) msg.error(r.error.message);
   else {
     msg.success("已上传");
@@ -267,6 +293,10 @@ async function onUpload(files: UploadFileInfo[]) {
 }
 
 function onRow(row: Entry) {
+  if (row.locked) {
+    msg.warning("面板自身文件，请走 SSH");
+    return;
+  }
   if (row.dir) go(row.path);
 }
 </script>
@@ -291,23 +321,23 @@ function onRow(row: Entry) {
       </p>
       <n-space style="margin-bottom: 8px">
         <n-upload multiple :default-upload="false" :show-file-list="false" @change="(e) => onUpload(e.fileList)">
-          <n-button>上传</n-button>
+          <n-button>上传到目录</n-button>
         </n-upload>
         <n-input v-model:value="mkdirName" placeholder="新目录或文件名" style="width: 160px" />
         <n-button @click="mkdir">新建目录</n-button>
         <n-button @click="createFile">新建文件</n-button>
-        <n-button @click="downloadSel">下载</n-button>
-        <n-button @click="del">删除</n-button>
+        <n-button :disabled="hasLocked" @click="downloadSel">下载</n-button>
+        <n-button :disabled="hasLocked" @click="del">删除</n-button>
         <n-input v-model:value="destPath" placeholder="复制/移动目标路径" style="width: 220px" />
-        <n-button @click="copyMove(true)">复制</n-button>
-        <n-button @click="copyMove(false)">移动</n-button>
-        <n-button @click="unzip">解压</n-button>
-        <n-button @click="compress">压缩 zip</n-button>
-        <n-button @click="openEdit">编辑</n-button>
-        <n-button @click="chmodShow = true">权限</n-button>
+        <n-button :disabled="hasLocked" @click="copyMove(true)">复制</n-button>
+        <n-button :disabled="hasLocked" @click="copyMove(false)">移动</n-button>
+        <n-button :disabled="hasLocked" @click="unzip">解压</n-button>
+        <n-button :disabled="hasLocked" @click="compress">压缩 zip</n-button>
+        <n-button :disabled="hasLocked" @click="openEdit">编辑</n-button>
+        <n-button :disabled="hasLocked" @click="chmodShow = true">权限</n-button>
         <span v-if="busy">{{ busy }}</span>
       </n-space>
-      <n-data-table :columns="columns" :data="items" :row-key="(r: Entry) => r.path" @update:checked-row-keys="(keys: string[]) => (checked = items.filter((x) => keys.includes(x.path)))" :row-props="(row: Entry) => ({ onDblclick: () => onRow(row) })" />
+      <n-data-table :columns="columns" :data="items" :row-key="(r: Entry) => r.path" @update:checked-row-keys="(keys: string[]) => (checked = items.filter((x) => keys.includes(x.path)))" :row-props="(row: Entry) => ({ onDblclick: () => onRow(row), onClick: () => row.locked && msg.warning('面板自身文件，请走 SSH') })" />
     </n-card>
     <n-modal v-model:show="confirmShow">
       <n-card title="请确认" style="width: 420px">

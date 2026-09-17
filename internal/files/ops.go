@@ -13,15 +13,16 @@ import (
 )
 
 type Entry struct {
-	Name  string `json:"name"`
-	Path  string `json:"path"`
-	Dir   bool   `json:"dir"`
-	Size  int64  `json:"size"`
-	Mode  string `json:"mode"`
-	Owner string `json:"owner"`
-	Group string `json:"group"`
-	Mtime string `json:"mtime"`
-	Link  bool   `json:"link"`
+	Name   string `json:"name"`
+	Path   string `json:"path"`
+	Dir    bool   `json:"dir"`
+	Size   int64  `json:"size"`
+	Mode   string `json:"mode"`
+	Owner  string `json:"owner"`
+	Group  string `json:"group"`
+	Mtime  string `json:"mtime"`
+	Link   bool   `json:"link"`
+	Locked bool   `json:"locked"`
 }
 
 func (s *Service) List(dir, filter string) ([]Entry, string, error) {
@@ -60,13 +61,14 @@ func (s *Service) List(dir, filter string) ([]Entry, string, error) {
 
 func (s *Service) toEntry(p string, info os.FileInfo) Entry {
 	e := Entry{
-		Name:  info.Name(),
-		Path:  p,
-		Dir:   info.IsDir(),
-		Size:  info.Size(),
-		Mode:  fmt.Sprintf("%04o", info.Mode().Perm()),
-		Mtime: info.ModTime().UTC().Format(time.RFC3339),
-		Link:  info.Mode()&os.ModeSymlink != 0,
+		Name:   info.Name(),
+		Path:   p,
+		Dir:    info.IsDir(),
+		Size:   info.Size(),
+		Mode:   fmt.Sprintf("%04o", info.Mode().Perm()),
+		Mtime:  info.ModTime().UTC().Format(time.RFC3339),
+		Link:   info.Mode()&os.ModeSymlink != 0,
+		Locked: s.Forbidden(p),
 	}
 	if st, ok := info.Sys().(*syscall.Stat_t); ok {
 		if u, err := user.LookupId(strconv.Itoa(int(st.Uid))); err == nil {

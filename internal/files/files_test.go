@@ -104,6 +104,9 @@ func TestEditLimitAndBinary(t *testing.T) {
 	if err := s.WriteText(p, "world"); err != nil {
 		t.Fatal(err)
 	}
+	if err := s.WriteText(p, string(bytes.Repeat([]byte("x"), MaxEdit+1))); err != ErrTooLarge {
+		t.Fatalf("写入超限：%v", err)
+	}
 	big := filepath.Join(s.WWW, "demo", "big.txt")
 	if err := os.WriteFile(big, bytes.Repeat([]byte("x"), MaxEdit+1), 0644); err != nil {
 		t.Fatal(err)
@@ -200,6 +203,121 @@ func TestCompressParentRejected(t *testing.T) {
 	dest := filepath.Join(s.WWW, "all.zip")
 	if err := s.Compress([]string{s.DataDir}, dest); err != ErrContains {
 		t.Fatalf("压缩父目录：%v", err)
+	}
+}
+
+func TestZipParentAndProtectedRejected(t *testing.T) {
+	s, _ := setup(t)
+	buf := &bytes.Buffer{}
+	if err := s.ZipTo(buf, []string{s.DataDir}); err != ErrContains {
+		t.Fatalf("打包父目录：%v", err)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("父目录打包不得写出内容：%d", buf.Len())
+	}
+	buf.Reset()
+	if err := s.ZipTo(buf, []string{filepath.Join(s.DataDir, "panel.db")}); err != ErrForbidden {
+		t.Fatalf("打包 panel.db：%v", err)
+	}
+	buf.Reset()
+	if err := s.ZipTo(buf, []string{s.Secrets}); err != ErrForbidden {
+		t.Fatalf("打包 secrets：%v", err)
+	}
+	buf.Reset()
+	if err := s.ZipTo(buf, []string{s.PanelKey}); err != ErrForbidden {
+		t.Fatalf("打包 panel.key：%v", err)
+	}
+	if buf.Len() != 0 {
+		t.Fatal("例外路径打包不得写出 zip")
+	}
+	buf.Reset()
+	if err := s.ZipTo(buf, []string{filepath.Join(s.WWW, "demo")}); err != nil {
+		t.Fatal(err)
+	}
+	if buf.Len() == 0 {
+		t.Fatal("普通目录应打出 zip")
+	}
+}
+
+func TestListMarksProtectedLocked(t *testing.T) {
+	s, _ := setup(t)
+	items, _, err := s.List(s.DataDir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawDB, sawSec bool
+	for _, it := range items {
+		switch it.Name {
+		case "panel.db":
+			sawDB = true
+			if !it.Locked {
+				t.Fatal("panel.db 应加锁")
+			}
+		case "secrets":
+			sawSec = true
+			if !it.Locked {
+				t.Fatal("secrets 应加锁")
+			}
+		}
+	}
+	if !sawDB || !sawSec {
+		t.Fatalf("列目录应仍显示例外名：db=%v secrets=%v items=%v", sawDB, sawSec, items)
+	}
+	tlsItems, _, err := s.List(filepath.Join(s.DataDir, "tls"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawKey bool
+	for _, it := range tlsItems {
+		if it.Name == "panel.key" {
+			sawKey = true
+			if !it.Locked {
+				t.Fatal("panel.key 应加锁")
+			}
+		}
+	}
+	if !sawKey {
+		t.Fatal("tls 下列表应显示 panel.key")
+	}
+	wwwItems, _, err := s.List(filepath.Join(s.WWW, "demo"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range wwwItems {
+		if it.Locked {
+			t.Fatalf("站点文件不应加锁：%+v", it)
+		}
+	}
+}
+
+func TestUploadDestFileVsDir(t *testing.T) {
+	s, _ := setup(t)
+	dir := filepath.Join(s.WWW, "demo")
+	existing := filepath.Join(dir, "a.txt")
+	got, err := s.ResolveUploadDest(dir, "up.bin")
+	if err != nil || got != filepath.Join(dir, "up.bin") {
+		t.Fatalf("目录目标：%s %v", got, err)
+	}
+	got, err = s.ResolveUploadDest(existing, "other.bin")
+	if err != nil || got != existing {
+		t.Fatalf("已存在文件：%s %v", got, err)
+	}
+	asFile, err := s.UploadPathIsFile(existing)
+	if err != nil || !asFile {
+		t.Fatalf("已存在文件应作目标文件：%v %v", asFile, err)
+	}
+	missingFile := filepath.Join(dir, "new.txt")
+	got, err = s.ResolveUploadDest(missingFile, "x.bin")
+	if err != nil || got != missingFile {
+		t.Fatalf("不存在但带扩展名：%s %v", got, err)
+	}
+	missingDir := filepath.Join(dir, "newdir")
+	got, err = s.ResolveUploadDest(missingDir, "x.bin")
+	if err != nil || got != filepath.Join(missingDir, "x.bin") {
+		t.Fatalf("不存在无扩展名按目录：%s %v", got, err)
+	}
+	if as, _ := s.UploadPathIsFile(missingDir); as {
+		t.Fatal("无扩展名不应当文件")
 	}
 }
 

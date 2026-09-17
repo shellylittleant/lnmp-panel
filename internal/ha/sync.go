@@ -302,5 +302,17 @@ func (s *Service) dumpPeerMySQL(ctx context.Context, src ReplSource, localPath s
 	if err != nil {
 		return fmt.Errorf("对端 mysqldump：%s", strings.TrimSpace(r.Stderr+" "+r.Stdout))
 	}
-	return migrate.RsyncOverSSH(ctx, s.Runner, user+"@"+sshHost+":"+remote, localPath, s.haKeyPath(), s.haKnownHosts(), port, false)
+	if err := migrate.RsyncOverSSH(ctx, s.Runner, user+"@"+sshHost+":"+remote, localPath, s.haKeyPath(), s.haKnownHosts(), port, false); err != nil {
+		return err
+	}
+	r, err = run(ctx, time.Minute, "/usr/bin/ssh",
+		"-i", s.haKeyPath(), "-p", fmt.Sprintf("%d", port),
+		"-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=yes",
+		"-o", "UserKnownHostsFile="+s.haKnownHosts(),
+		"-o", "GlobalKnownHostsFile=/dev/null", "-o", "BatchMode=yes",
+		user+"@"+sshHost, "rm -f "+remote)
+	if err != nil {
+		return fmt.Errorf("清理对端 dump：%s", strings.TrimSpace(r.Stderr+" "+r.Stdout))
+	}
+	return nil
 }

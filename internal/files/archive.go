@@ -11,7 +11,26 @@ import (
 	"strings"
 )
 
+func (s *Service) CheckZipSources(paths []string) error {
+	for _, p := range paths {
+		abs, err := s.Resolve(p)
+		if err != nil {
+			return err
+		}
+		if _, err := os.Lstat(abs); err != nil {
+			return ErrNotFound
+		}
+		if err := s.rejectProtectedTree(abs); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Service) ZipTo(w io.Writer, paths []string) error {
+	if err := s.CheckZipSources(paths); err != nil {
+		return err
+	}
 	zw := zip.NewWriter(w)
 	defer zw.Close()
 	for _, p := range paths {

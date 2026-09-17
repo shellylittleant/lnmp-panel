@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"lnmp-panel/internal/exec"
 	"lnmp-panel/internal/jobs"
 	"lnmp-panel/internal/migrate"
 	"lnmp-panel/internal/mysql"
@@ -224,6 +225,35 @@ func TestTwoRoundSwitchDegradesOldMaster(t *testing.T) {
 	// 回归：任期未传播时两边都是 2，自我保护失效（审核实测双主）。
 	if ShouldDegrade(RoleMaster, 2, true, RoleMaster, 2) {
 		t.Fatal("任期相同不得降级（因此必须传播任期）")
+	}
+}
+
+func TestDumpPeerMySQLRemovesRemoteDump(t *testing.T) {
+	s := setupHA(t)
+	s.SkipExec = false
+	var cmds [][]string
+	s.Runner = func(ctx context.Context, d time.Duration, argv ...string) (exec.Result, error) {
+		cmds = append(cmds, append([]string(nil), argv...))
+		return exec.Result{}, nil
+	}
+	dest := filepath.Join(s.DataDir, "got.sql")
+	if err := s.dumpPeerMySQL(context.Background(), ReplSource{Host: "203.0.113.9"}, dest); err != nil {
+		t.Fatal(err)
+	}
+	var kinds []string
+	for _, c := range cmds {
+		j := strings.Join(c, " ")
+		switch {
+		case strings.Contains(j, "mysqldump"):
+			kinds = append(kinds, "dump")
+		case len(c) > 0 && strings.Contains(c[0], "rsync"):
+			kinds = append(kinds, "rsync")
+		case strings.Contains(j, "rm -f /var/lib/lnmp-panel/tmp/ha-mysql.sql"):
+			kinds = append(kinds, "rm")
+		}
+	}
+	if strings.Join(kinds, ",") != "dump,rsync,rm" {
+		t.Fatalf("应对端 dump→rsync→rm，got %v cmds=%v", kinds, cmds)
 	}
 }
 

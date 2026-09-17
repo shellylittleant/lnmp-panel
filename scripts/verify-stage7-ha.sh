@@ -124,6 +124,18 @@ assert_panel_ping_both() {
   echo "$b" | grep -qi alive || { echo PANEL_PING_B_FAIL; exit 1; }
 }
 
+assert_dump_gone() {
+  if docker exec "$A" test -f /var/lib/lnmp-panel/tmp/ha-mysql.sql; then
+    echo MASTER_DUMP_LEFT_A
+    exit 1
+  fi
+  if docker exec "$B" test -f /var/lib/lnmp-panel/tmp/ha-mysql.sql; then
+    echo DUMP_LEFT_B
+    exit 1
+  fi
+  echo DUMP_CLEAN_OK
+}
+
 print_ha() {
   local tag="$1"
   local STA STB
@@ -261,6 +273,7 @@ for i in $(seq 1 90); do
   if docker exec "$B" test -f /var/www/demo/index.html && docker exec "$B" grep -q HA_SITE_A /var/www/demo/index.html; then
     if docker exec "$B" mysql --defaults-extra-file=/var/lib/lnmp-panel/secrets/mysql-panel.cnf -N -e "SELECT v FROM hadb.mark WHERE id=1" 2>/dev/null | grep -q from-a; then
       echo CATCHUP1_OK
+      assert_dump_gone
       break
     fi
   fi
@@ -388,6 +401,7 @@ for i in $(seq 1 90); do
   if docker exec "$A" test -f /var/www/demo/from-b.txt && docker exec "$A" grep -q HA_FROM_NEW_MASTER /var/www/demo/from-b.txt; then
     if docker exec "$A" mysql --defaults-extra-file=/var/lib/lnmp-panel/secrets/mysql-panel.cnf -N -e "SELECT v FROM hadb.mark WHERE id=1" 2>/dev/null | grep -q from-b2; then
       echo CATCHUP3_OK
+      assert_dump_gone
       break
     fi
   fi
