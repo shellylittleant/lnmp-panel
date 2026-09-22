@@ -61,9 +61,9 @@ type pending struct {
 }
 
 type Service struct {
-	db    *store.DB
-	mu    sync.Mutex
-	pend  map[string]pending
+	db     *store.DB
+	mu     sync.Mutex
+	pend   map[string]pending
 	OnLock func(ip string)
 }
 
@@ -255,11 +255,15 @@ func (s *Service) checkTOTP(code string) error {
 	if !ok {
 		return ErrBadTOTP
 	}
-	if last.Valid && last.Int64 == step {
+	res, err := s.db.SQL.Exec(`UPDATE admin SET totp_last_step=? WHERE id=1 AND (totp_last_step IS NULL OR totp_last_step < ?)`, step, step)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
 		return ErrBadTOTP
 	}
-	_, err := s.db.SQL.Exec(`UPDATE admin SET totp_last_step = ? WHERE id = 1`, step)
-	return err
+	return nil
 }
 
 func (s *Service) createSession(ip, ua string) (*Session, error) {
@@ -409,26 +413,23 @@ func (s *Service) EnableTOTP(code string) error {
 	if len(secret) == 0 {
 		return fmt.Errorf("请先调用 setup")
 	}
-	ok, err := totp.ValidateCustom(strings.TrimSpace(code), string(secret), time.Now().UTC(), totp.ValidateOpts{
-		Period:    30,
-		Skew:      1,
-		Digits:    otp.DigitsSix,
-		Algorithm: otp.AlgorithmSHA1,
-	})
-	if err != nil || !ok {
-		return ErrBadTOTP
+	if err := s.checkTOTP(code); err != nil {
+		return err
 	}
-	_, err = s.db.SQL.Exec(`UPDATE admin SET totp_enabled = 1, updated_at = ? WHERE id = 1`, s.db.Now())
+	_, err := s.db.SQL.Exec(`UPDATE admin SET totp_enabled = 1, updated_at = ? WHERE id = 1`, s.db.Now())
 	return err
 }
 
-func (s *Service) DisableTOTP(password string) error {
+func (s *Service) DisableTOTP(password, code string) error {
 	var hash string
 	if err := s.db.SQL.QueryRow(`SELECT password_hash FROM admin WHERE id = 1`).Scan(&hash); err != nil {
 		return err
 	}
 	if !CheckPassword(password, hash) {
 		return ErrInvalidCreds
+	}
+	if err := s.checkTOTP(code); err != nil {
+		return err
 	}
 	_, err := s.db.SQL.Exec(`UPDATE admin SET totp_enabled = 0, totp_secret = NULL, totp_last_step = 0, updated_at = ? WHERE id = 1`, s.db.Now())
 	return err

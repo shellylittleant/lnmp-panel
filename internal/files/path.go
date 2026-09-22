@@ -173,18 +173,3 @@ func chownWWWData(path string) {
 	}
 	_ = os.Chown(path, uid, gid)
 }
-
-func chownWWWWalk(root string) {
-	_ = filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil
-		}
-		chownWWWData(p)
-		if info.IsDir() {
-			_ = os.Chmod(p, 0755)
-		} else if info.Mode().IsRegular() {
-			_ = os.Chmod(p, 0644)
-		}
-		return nil
-	})
-}

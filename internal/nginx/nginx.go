@@ -145,25 +145,17 @@ func (s *Service) TestAndReload(ctx context.Context) error {
 	}
 	if SystemdLive() {
 		r, err = run(ctx, 15*time.Second, "/usr/bin/systemctl", "reload", "nginx")
-		if err == nil {
-			time.Sleep(300 * time.Millisecond)
-			return nil
+		if err != nil {
+			return fmt.Errorf("systemctl reload nginx 失败：%s", clip(r.Stderr))
 		}
-		r2, err2 := run(ctx, 15*time.Second, "/usr/bin/systemctl", "start", "nginx")
-		if err2 != nil {
-			return fmt.Errorf("systemctl reload/start nginx 失败：%s %s", clip(r.Stderr), clip(r2.Stderr))
-		}
-		return nil
-	}
-	r, err = run(ctx, 10*time.Second, s.Bin, "-s", "reload")
-	if err == nil {
 		time.Sleep(300 * time.Millisecond)
 		return nil
 	}
-	r2, err2 := run(ctx, 10*time.Second, s.Bin)
-	if err2 != nil {
-		return fmt.Errorf("nginx reload/start 失败：%s %s", clip(r.Stderr), clip(r2.Stderr))
+	r, err = run(ctx, 10*time.Second, s.Bin, "-s", "reload")
+	if err != nil {
+		return fmt.Errorf("nginx reload 失败：%s", clip(r.Stderr+" "+r.Stdout))
 	}
+	time.Sleep(300 * time.Millisecond)
 	return nil
 }
 

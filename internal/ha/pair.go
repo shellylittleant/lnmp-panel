@@ -232,7 +232,7 @@ func (s *Service) prepareMasterMySQL(ctx context.Context) error {
 		pass = randomHex(12) + "Aa1!"
 		_ = s.Settings.Set("ha_repl_password", pass)
 	}
-	if err := s.MySQL.EnsureReplUser(ctx, pass); err != nil {
+	if err := s.MySQL.EnsureReplUser(ctx, pass, s.peerIP()); err != nil {
 		return err
 	}
 	return s.MySQL.SetReadOnly(ctx, false)

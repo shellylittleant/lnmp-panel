@@ -146,7 +146,7 @@ func TestZipSlipRejected(t *testing.T) {
 func TestZipAndUnzipRoundtrip(t *testing.T) {
 	s, _ := setup(t)
 	out := filepath.Join(s.WWW, "pack.zip")
-	if err := s.Compress([]string{filepath.Join(s.WWW, "demo")}, out); err != nil {
+	if err := s.Compress([]string{filepath.Join(s.WWW, "demo")}, out, false); err != nil {
 		t.Fatal(err)
 	}
 	dest := filepath.Join(s.WWW, "out")
@@ -201,7 +201,7 @@ func TestCopyIntoSelfRejected(t *testing.T) {
 func TestCompressParentRejected(t *testing.T) {
 	s, _ := setup(t)
 	dest := filepath.Join(s.WWW, "all.zip")
-	if err := s.Compress([]string{s.DataDir}, dest); err != ErrContains {
+	if err := s.Compress([]string{s.DataDir}, dest, false); err != ErrContains {
 		t.Fatalf("压缩父目录：%v", err)
 	}
 }
@@ -318,6 +318,52 @@ func TestUploadDestFileVsDir(t *testing.T) {
 	}
 	if as, _ := s.UploadPathIsFile(missingDir); as {
 		t.Fatal("无扩展名不应当文件")
+	}
+}
+
+func TestUnzipLeavesExistingMode(t *testing.T) {
+	s, _ := setup(t)
+	keep := filepath.Join(s.WWW, "keep.txt")
+	if err := os.WriteFile(keep, []byte("stay"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	zpath := filepath.Join(s.WWW, "one.zip")
+	f, err := os.Create(zpath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zw := zip.NewWriter(f)
+	w, _ := zw.Create("fresh.txt")
+	_, _ = w.Write([]byte("new"))
+	_ = zw.Close()
+	_ = f.Close()
+	if err := s.Unzip(zpath, s.WWW, true); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(keep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf("原有文件权限被改成 %o", info.Mode().Perm())
+	}
+	if b, _ := os.ReadFile(filepath.Join(s.WWW, "fresh.txt")); string(b) != "new" {
+		t.Fatal(string(b))
+	}
+}
+
+func TestChmodProtectedParentRejected(t *testing.T) {
+	s, _ := setup(t)
+	tls := filepath.Join(s.DataDir, "tls")
+	if err := s.Chmod(tls, "", "", 0777, false); err != ErrContains {
+		t.Fatalf("非递归 chmod 父目录：%v", err)
+	}
+	info, err := os.Stat(tls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() == 0777 {
+		t.Fatal("目录被改成 0777")
 	}
 }
 

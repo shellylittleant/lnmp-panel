@@ -28,6 +28,10 @@ const path = ref((route.query.path as string) || "/var/www");
 const filter = ref("");
 const items = ref<Entry[]>([]);
 const checked = ref<Entry[]>([]);
+const zipName = ref("archive.zip");
+const uploadList = ref<UploadFileInfo[]>([]);
+const seenUpload = new Set<string>();
+let loadSeq = 0;
 const shortcuts = ref<{ id: number; name: string; root: string }[]>([]);
 const users = ref<string[]>([]);
 const groups = ref<string[]>([]);
@@ -80,13 +84,16 @@ const crumbs = computed(() => {
 });
 
 async function load() {
+  const seq = ++loadSeq;
   const r = await api<{ path: string; items: Entry[] }>("GET", "/files/list?path=" + encodeURIComponent(path.value) + "&q=" + encodeURIComponent(filter.value));
+  if (seq !== loadSeq) return;
   if (!r.ok) {
     msg.error(r.error.message);
     return;
   }
   path.value = r.data.path;
   items.value = r.data.items || [];
+  checked.value = [];
   router.replace({ query: { path: path.value } });
 }
 
@@ -149,7 +156,7 @@ function rejectLocked() {
 
 async function del() {
   if (!checked.value.length || rejectLocked()) return;
-  ask("确认删除选中的 " + checked.value.length + " 项？不可恢复。", async () => {
+  ask("确认删除以下路径？不可恢复。\n" + checked.value.map((x) => x.path).join("\n"), async () => {
     const r = await api("POST", "/files/delete", { paths: checked.value.map((x) => x.path), confirm: true });
     if (!r.ok) msg.error(r.error.message);
     else {
@@ -200,13 +207,24 @@ async function unzip() {
 
 async function compress() {
   if (!checked.value.length || rejectLocked()) return;
-  const dest = path.value.replace(/\/+$/, "") + "/archive.zip";
-  const r = await api("POST", "/files/compress", { paths: checked.value.map((x) => x.path), dest });
-  if (!r.ok) msg.error(r.error.message);
-  else {
-    msg.success("已压缩");
+  const name = zipName.value.trim() || "archive.zip";
+  const dest = path.value.replace(/\/+$/, "") + "/" + name;
+  const exists = items.value.some((x) => x.path === dest || x.name === name);
+  const run = async (confirm: boolean) => {
+    const r = await api("POST", "/files/compress", { paths: checked.value.map((x) => x.path), dest, confirm });
+    if (!r.ok) {
+      if (r.error.message.includes("确认覆盖")) {
+        ask("将覆盖 " + dest, () => run(true));
+        return;
+      }
+      msg.error(r.error.message);
+      return;
+    }
+    msg.success(confirm || exists ? "已覆盖 " + dest : "已压缩到 " + dest);
     await load();
-  }
+  };
+  if (exists) ask("将覆盖 " + dest, () => run(true));
+  else await run(false);
 }
 
 async function openEdit() {
@@ -272,6 +290,20 @@ function downloadSel() {
   window.open(url, "_blank");
 }
 
+async function onFileList(list: UploadFileInfo[]) {
+  const fresh: UploadFileInfo[] = [];
+  for (const f of list) {
+    if (!f.file || seenUpload.has(f.id)) continue;
+    seenUpload.add(f.id);
+    fresh.push(f);
+  }
+  uploadList.value = list;
+  if (!fresh.length) return;
+  await onUpload(fresh, false);
+  seenUpload.clear();
+  uploadList.value = [];
+}
+
 async function onUpload(files: UploadFileInfo[], confirm = false) {
   if (!files.length) return;
   const form = new FormData();
@@ -320,7 +352,7 @@ function onRow(row: Entry) {
         <a v-for="c in crumbs" :key="c.path" href="#" style="margin-right: 8px" @click.prevent="go(c.path)">{{ c.label }}</a>
       </p>
       <n-space style="margin-bottom: 8px">
-        <n-upload multiple :default-upload="false" :show-file-list="false" @change="(e) => onUpload(e.fileList)">
+        <n-upload multiple :default-upload="false" :show-file-list="false" :file-list="uploadList" @update:file-list="onFileList">
           <n-button>上传到目录</n-button>
         </n-upload>
         <n-input v-model:value="mkdirName" placeholder="新目录或文件名" style="width: 160px" />
@@ -332,6 +364,7 @@ function onRow(row: Entry) {
         <n-button :disabled="hasLocked" @click="copyMove(true)">复制</n-button>
         <n-button :disabled="hasLocked" @click="copyMove(false)">移动</n-button>
         <n-button :disabled="hasLocked" @click="unzip">解压</n-button>
+        <n-input v-model:value="zipName" placeholder="压缩文件名" style="width: 140px" />
         <n-button :disabled="hasLocked" @click="compress">压缩 zip</n-button>
         <n-button :disabled="hasLocked" @click="openEdit">编辑</n-button>
         <n-button :disabled="hasLocked" @click="chmodShow = true">权限</n-button>

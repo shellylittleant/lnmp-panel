@@ -131,6 +131,9 @@ func Run(cfgPath string, skipOS bool) error {
 	setSvc := settings.New(db)
 	setSvc.SetConfigPath(cfgPath)
 	jobSvc := jobs.New(db)
+	if err := jobSvc.AbandonUnfinished(); err != nil {
+		return err
+	}
 	tpl := template.New(db)
 	if err := tpl.SyncOfficial(); err != nil {
 		return fmt.Errorf("同步官方模板：%w", err)

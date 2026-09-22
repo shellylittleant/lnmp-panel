@@ -15,14 +15,6 @@ import (
 	"lnmp-panel/internal/nginx"
 )
 
-func cloneLost(err error) bool {
-	if err == nil {
-		return false
-	}
-	m := strings.ToLower(err.Error())
-	return strings.Contains(m, "lost") || strings.Contains(m, "gone away") || strings.Contains(m, "connect")
-}
-
 func (s *Service) StartSync(ctx context.Context) error {
 	st, err := s.loadState()
 	if err != nil {
@@ -232,15 +224,7 @@ func (s *Service) firstCopy(ctx context.Context, src ReplSource) error {
 		_ = s.MySQL.Restart(ctx)
 	}
 	_ = s.pullDebianCNF(ctx, src.Host)
-	cloneErr := s.MySQL.CloneFrom(ctx, src.Host, src.Port, src.User, src.Pass)
-	up := s.MySQL.EnsureRunning(ctx)
-	if up == nil && (cloneErr == nil || cloneLost(cloneErr)) {
-		if strings.EqualFold(s.MySQL.GTIDMode(ctx), "ON") {
-			_ = s.MySQL.ResetServerUUID(ctx)
-			return nil
-		}
-	}
-	s.setDetail("clone 不可用，改用全库导出")
+	s.setDetail("全库导出")
 	tmp := "/var/lib/lnmp-panel/tmp"
 	if s.DataDir != "" {
 		tmp = filepath.Join(s.DataDir, "tmp")

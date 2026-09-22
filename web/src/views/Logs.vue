@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from "vue";
+import { useRouter } from "vue-router";
 import {
   NAlert,
   NButton,
@@ -17,6 +18,7 @@ import type { DataTableColumns, SelectOption } from "naive-ui";
 import { api, panelPrefix } from "../api";
 
 const msg = useMessage();
+const router = useRouter();
 const sources = ref<{ id: string; name: string; path: string; kind: string }[]>([]);
 const source = ref("journald");
 const q = ref("");
@@ -87,7 +89,12 @@ function follow() {
     }
   };
   es.onerror = () => {
-    /* 浏览器会自动重连；4 分钟服务端会关 */
+    void api("GET", "/auth/session").then((r) => {
+      if (!r.ok) {
+        stopFollow();
+        void router.replace("/login");
+      }
+    });
   };
 }
 
@@ -128,6 +135,20 @@ async function saveRotate() {
   const r = await api("PUT", "/logs/rotate", {
     keep_days: keepDays.value,
     max_size: maxSize.value,
+    force: force.value,
+  });
+  if (!r.ok) {
+    msg.error(r.error.message);
+    return;
+  }
+  msg.success("已按表单保存 logrotate");
+  await loadRotate();
+}
+
+async function saveRotateRaw() {
+  const r = await api("PUT", "/logs/rotate", {
+    keep_days: keepDays.value,
+    max_size: maxSize.value,
     content: rotateRaw.value,
     force: force.value,
   });
@@ -135,7 +156,7 @@ async function saveRotate() {
     msg.error(r.error.message);
     return;
   }
-  msg.success("已保存 logrotate");
+  msg.success("已保存 logrotate 原文");
   await loadRotate();
 }
 
@@ -220,10 +241,11 @@ function kv(m: Record<string, number> | undefined) {
       <n-form inline>
         <n-form-item label="保留天数"><n-input :value="String(keepDays)" @update:value="setKeepDays" /></n-form-item>
         <n-form-item label="单文件上限"><n-input v-model:value="maxSize" /></n-form-item>
-        <n-button type="primary" @click="saveRotate">保存</n-button>
+        <n-button type="primary" @click="saveRotate">保存表单</n-button>
         <label><input type="checkbox" v-model="force" /> 确认覆盖磁盘</label>
       </n-form>
       <n-input v-model:value="rotateRaw" type="textarea" :autosize="{ minRows: 8 }" />
+      <n-button style="margin-top: 8px" @click="saveRotateRaw">保存原文</n-button>
     </n-card>
   </n-space>
 </template>

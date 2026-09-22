@@ -65,6 +65,11 @@ func (s *Service) Update(id, phase, detail string, progress int) {
 	_, _ = s.db.SQL.Exec(`UPDATE jobs SET phase=?, detail=?, progress=? WHERE id=?`, phase, detail, progress, id)
 }
 
+func (s *Service) AbandonUnfinished() error {
+	_, err := s.db.SQL.Exec(`UPDATE jobs SET phase='failed', detail=?, progress=100, finished_at=? WHERE finished_at IS NULL`, "面板重启，结果未知", s.db.Now())
+	return err
+}
+
 func (s *Service) Finish(id string, err error) {
 	detail := "完成"
 	phase := "done"

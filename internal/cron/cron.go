@@ -236,8 +236,7 @@ func (s *Service) RunNow(ctx context.Context, id int64) error {
 		_, _ = s.db.SQL.Exec(`UPDATE cron_jobs SET last_run_at=?, last_status=? WHERE id=?`, now, "ok", id)
 		return nil
 	}
-	argv := strings.Fields(cmd)
-	r, err := exec.RunAbs(ctx, 60*time.Second, argv...)
+	r, err := exec.RunShell(ctx, 60*time.Second, cmd)
 	st := "ok"
 	if err != nil {
 		st = exec.Clip(err.Error() + " " + r.Stderr)
@@ -254,7 +253,11 @@ func (s *Service) Drifted(ctx context.Context) bool {
 	if err != nil {
 		return false
 	}
-	block := extractPanelBlock(s.readCrontab(ctx))
+	existing, err := s.readCrontab(ctx)
+	if err != nil {
+		return false
+	}
+	block := extractPanelBlock(existing)
 	var want strings.Builder
 	for _, j := range items {
 		if !j.Enabled {
@@ -273,7 +276,10 @@ func (s *Service) syncCrontab(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	existing := s.readCrontab(ctx)
+	existing, err := s.readCrontab(ctx)
+	if err != nil {
+		return err
+	}
 	outside := stripPanelBlock(existing)
 	var b strings.Builder
 	b.WriteString(outside)
@@ -299,16 +305,24 @@ func (s *Service) syncCrontab(ctx context.Context) error {
 	return nil
 }
 
-func (s *Service) readCrontab(ctx context.Context) string {
+func (s *Service) readCrontab(ctx context.Context) (string, error) {
 	run := s.Runner
 	if run == nil {
 		run = exec.Run
 	}
 	r, err := run(ctx, 5*time.Second, "/usr/bin/crontab", "-l")
 	if err != nil {
-		return ""
+		msg := strings.ToLower(r.Stderr + " " + r.Stdout)
+		if strings.Contains(msg, "no crontab") {
+			return "", nil
+		}
+		detail := strings.TrimSpace(r.Stderr + " " + r.Stdout)
+		if detail == "" {
+			detail = err.Error()
+		}
+		return "", fmt.Errorf("读取 crontab 失败：%s", exec.Clip(detail))
 	}
-	return r.Stdout
+	return r.Stdout, nil
 }
 
 func stripPanelBlock(s string) string {

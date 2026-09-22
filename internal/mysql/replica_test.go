@@ -87,3 +87,13 @@ func TestWritePanelCNF(t *testing.T) {
 		t.Fatalf("mode %v", st.Mode())
 	}
 }
+
+func TestReplUserRejectsWildcard(t *testing.T) {
+	s := &Service{SkipExec: true}
+	if err := s.EnsureReplUser(context.Background(), "secret", "%"); err == nil {
+		t.Fatal("应拒绝 %")
+	}
+	if err := s.EnsureReplUser(context.Background(), "secret", "10.1.2.3"); err != nil {
+		t.Fatal(err)
+	}
+}

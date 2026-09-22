@@ -65,6 +65,7 @@ async function createDB() {
 }
 
 async function dropDB(name: string) {
+  if (!window.confirm("删除数据库 " + name + "：执行 DROP DATABASE，库内数据不可恢复。")) return;
   const r = await api("DELETE", "/mysql/databases/" + name);
   if (!r.ok) {
     msg.error(r.error.message);
@@ -90,7 +91,8 @@ async function createUser() {
   await load();
 }
 
-async function delUser(id: number) {
+async function delUser(id: number, label: string) {
+  if (!window.confirm("删除 MySQL 用户 " + label + "：该账号立即不能登录。")) return;
   const r = await api("DELETE", "/mysql/users/" + id);
   if (!r.ok) {
     msg.error(r.error.message);
@@ -108,11 +110,29 @@ async function exp(name: string) {
   }
 }
 
+const newPass = ref<Record<number, string>>({});
+
+async function setPass(u: { id: number; user: string; host: string }) {
+  const password = (newPass.value[u.id] || "").trim();
+  if (!password) {
+    msg.error("请填写新密码");
+    return;
+  }
+  const r = await api("PUT", "/mysql/users/" + u.id + "/password", { password });
+  if (!r.ok) {
+    msg.error(r.error.message);
+    return;
+  }
+  newPass.value[u.id] = "";
+  msg.success("已修改 " + u.user + "@" + u.host + " 的密码");
+}
+
 async function imp() {
   if (!impDB.value || !fileEl.value?.files?.length) {
     msg.error("请选择库和 SQL 文件");
     return;
   }
+  if (!window.confirm("向数据库 " + impDB.value + " 导入 SQL：文件中的语句会立即执行，可能覆盖已有数据。")) return;
   const fd = new FormData();
   fd.append("file", fileEl.value.files[0]);
   busy.value = "导入";
@@ -179,7 +199,7 @@ async function useTpl() {
         <n-button @click="impDB && exp(impDB)">导出 SQL</n-button>
         <input ref="fileEl" type="file" accept=".sql,text/plain" />
         <n-button @click="imp">导入</n-button>
-        <n-button type="error" @click="impDB && dropDB(impDB)">删除该库</n-button>
+        <n-button type="error" :disabled="!impDB" @click="dropDB(impDB)">删除该库</n-button>
       </n-space>
     </n-card>
     <n-card title="用户">
@@ -192,7 +212,12 @@ async function useTpl() {
       </n-form>
       <n-data-table :columns="userCols" :data="users" />
       <n-space style="margin-top: 8px">
-        <n-button v-for="u in users" :key="u.id" type="error" size="small" @click="delUser(u.id)">删除 {{ u.user }}@{{ u.host }}</n-button>
+        <n-space v-for="u in users" :key="u.id">
+          <span>{{ u.user }}@{{ u.host }}</span>
+          <n-input v-model:value="newPass[u.id]" type="password" placeholder="新密码" style="width: 160px" />
+          <n-button size="small" @click="setPass(u)">改密码</n-button>
+          <n-button type="error" size="small" @click="delUser(u.id, u.user + '@' + u.host)">删除</n-button>
+        </n-space>
       </n-space>
     </n-card>
     <n-card title="面板托管 my.cnf 片段">

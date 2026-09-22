@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -94,16 +95,22 @@ func (s *Service) SetReadOnly(ctx context.Context, on bool) error {
 	return nil
 }
 
-func (s *Service) EnsureReplUser(ctx context.Context, pass string) error {
+func (s *Service) EnsureReplUser(ctx context.Context, pass, host string) error {
+	if net.ParseIP(host) == nil {
+		return fmt.Errorf("复制账号必须限制到对端 IP")
+	}
 	if s.SkipExec {
 		return nil
 	}
 	if err := ValidIdent("lnmp_repl"); err != nil {
 		return err
 	}
-	stmt := "CREATE USER IF NOT EXISTS 'lnmp_repl'@'%' IDENTIFIED BY " + quoteSQL(pass) +
-		"; ALTER USER 'lnmp_repl'@'%' IDENTIFIED BY " + quoteSQL(pass) +
-		"; GRANT REPLICATION SLAVE, REPLICATION CLIENT, BACKUP_ADMIN ON *.* TO 'lnmp_repl'@'%'; FLUSH PRIVILEGES;"
+	h := quoteSQL(host)
+	stmt := "DROP USER IF EXISTS 'lnmp_repl'@'%'" +
+		"; CREATE USER IF NOT EXISTS 'lnmp_repl'@" + h + " IDENTIFIED BY " + quoteSQL(pass) +
+		"; ALTER USER 'lnmp_repl'@" + h + " IDENTIFIED BY " + quoteSQL(pass) +
+		"; GRANT REPLICATION SLAVE, REPLICATION CLIENT, BACKUP_ADMIN ON *.* TO 'lnmp_repl'@" + h +
+		"; FLUSH PRIVILEGES;"
 	if _, err := s.Exec(ctx, stmt); err != nil {
 		_, err = s.execRoot(ctx, stmt)
 		return err
@@ -235,32 +242,6 @@ func (s *Service) execOrRoot(ctx context.Context, sqlText string) error {
 	}
 	_, err := s.execRoot(ctx, sqlText)
 	return err
-}
-
-func (s *Service) CloneFrom(ctx context.Context, host string, port int, user, pass string) error {
-	if s.SkipExec {
-		return nil
-	}
-	if port <= 0 {
-		port = 3306
-	}
-	if err := ValidHost(host); err != nil {
-		return err
-	}
-	if err := ValidIdent(user); err != nil {
-		return err
-	}
-	_ = s.execOrRoot(ctx, "INSTALL PLUGIN clone SONAME 'mysql_clone.so';")
-	donor := fmt.Sprintf("%s:%d", host, port)
-	if err := s.execOrRoot(ctx, "SET GLOBAL clone_valid_donor_list="+quoteSQL(donor)); err != nil {
-		return err
-	}
-	stmt := fmt.Sprintf("CLONE INSTANCE FROM %s@%s:%d IDENTIFIED BY %s;", quoteSQL(user), host, port, quoteSQL(pass))
-	if _, err := s.execLong(ctx, 30*time.Minute, stmt); err != nil {
-		_, err = s.execRoot(ctx, stmt)
-		return err
-	}
-	return nil
 }
 
 func (s *Service) DumpAllForReplica(ctx context.Context, w io.Writer) error {

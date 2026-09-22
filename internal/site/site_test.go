@@ -2,6 +2,7 @@ package site
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -333,6 +334,93 @@ func TestUseTemplateAfterRawRestoresOfficial(t *testing.T) {
 	got, _ = s.Get(st.ID)
 	if got.RawMode {
 		t.Fatal("应退出原文模式")
+	}
+}
+
+func TestUpdateEmptyPHPClearsAndNilKeeps(t *testing.T) {
+	s := setup(t)
+	ver := "8.3"
+	st, err := s.Create(context.Background(), In{SiteKey: "phpapp2", Domains: []string{"php2.example.test"}, PHPVersion: &ver})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Update(context.Background(), st.ID, In{Name: "只改名"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.PHPVersion == nil || *got.PHPVersion != "8.3" {
+		t.Fatalf("未提交 PHP 不应清空：%v", got.PHPVersion)
+	}
+	empty := ""
+	got, err = s.Update(context.Background(), st.ID, In{PHPVersion: &empty})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.PHPVersion != nil && *got.PHPVersion != "" {
+		t.Fatalf("空字符串应清空 PHP：%v", *got.PHPVersion)
+	}
+}
+
+func TestUpdateNginxFailDoesNotCommit(t *testing.T) {
+	s := setup(t)
+	st, err := s.Create(context.Background(), In{SiteKey: "keep", Domains: []string{"keep.example.test"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SkipNX = false
+	bin := filepath.Join(t.TempDir(), "nginx")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	s.ngx.Bin = bin
+	s.ngx.Runner = func(ctx context.Context, d time.Duration, argv ...string) (exec.Result, error) {
+		for _, a := range argv {
+			if a == "-t" {
+				return exec.Result{Stderr: "bad"}, errors.New("fail")
+			}
+		}
+		return exec.Result{}, nil
+	}
+	if _, err := s.Update(context.Background(), st.ID, In{Name: "不该落库"}); err == nil {
+		t.Fatal("nginx -t 失败应返回错误")
+	}
+	got, err := s.Get(st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name == "不该落库" {
+		t.Fatal("测试失败后不应改库")
+	}
+}
+
+func TestEmptyClearsTemplateID(t *testing.T) {
+	var in In
+	if err := json.Unmarshal([]byte(`{"nginx_template_id":"","domains":[]}`), &in); err != nil {
+		t.Fatal(err)
+	}
+	if in.NginxTemplateID == nil || *in.NginxTemplateID != 0 {
+		t.Fatalf("空字符串应表示清空：%v", in.NginxTemplateID)
+	}
+	if in.Domains == nil {
+		t.Fatal("空数组应是清空而不是不改")
+	}
+	var omitted In
+	if err := json.Unmarshal([]byte(`{}`), &omitted); err != nil {
+		t.Fatal(err)
+	}
+	if omitted.NginxTemplateID != nil || omitted.Domains != nil {
+		t.Fatal("缺省应表示不改")
+	}
+}
+
+func TestRawRenewRewritesCertOnly(t *testing.T) {
+	body := "server {\n    listen 80;\n    ssl_certificate /old/fullchain.pem;\n    ssl_certificate_key /old/privkey.pem;\n    # hand\n}\n"
+	got := rewriteCertPaths(body, "/new/fullchain.pem", "/new/privkey.pem")
+	if !strings.Contains(got, "ssl_certificate /new/fullchain.pem;") || !strings.Contains(got, "ssl_certificate_key /new/privkey.pem;") {
+		t.Fatal(got)
+	}
+	if !strings.Contains(got, "# hand") {
+		t.Fatal(got)
 	}
 }
 

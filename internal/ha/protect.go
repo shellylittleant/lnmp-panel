@@ -2,8 +2,11 @@ package ha
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"net"
+	"strings"
 	"time"
 
 	"lnmp-panel/internal/mysql"
@@ -17,7 +20,12 @@ func (s *Service) Promote(ctx context.Context) error {
 	if st.Role != RoleStandby {
 		return fmt.Errorf("只有备机可以启用主模式")
 	}
-	s.requestPeerStepDown(ctx)
+	if s.MySQL != nil && s.MySQL.Installed() && net.ParseIP(s.peerIP()) == nil {
+		return fmt.Errorf("没有对端 IP，不能创建复制账号")
+	}
+	if err := s.requestPeerStepDown(ctx); err != nil && !errors.Is(err, errPeerUnreachable) {
+		return fmt.Errorf("对端降级失败，已拒绝提升：%s", err.Error())
+	}
 	_ = s.pullAndAdoptTerm(ctx)
 	st, err = s.loadState()
 	if err != nil {
@@ -49,18 +57,24 @@ func (s *Service) Promote(ctx context.Context) error {
 	return nil
 }
 
-func (s *Service) requestPeerStepDown(ctx context.Context) {
+var errPeerUnreachable = errors.New("对端不可达")
+
+func (s *Service) requestPeerStepDown(ctx context.Context) error {
 	addr, fp, err := s.peerMeta()
-	if err != nil || s.Migrate == nil {
-		return
+	if err != nil || addr == "" || s.Migrate == nil {
+		return errPeerUnreachable
 	}
 	token := s.machineToken()
 	qctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 	var out map[string]any
 	if err := s.Migrate.PostPeer(qctx, addr, fp, "", "/ha/peer/step-down", map[string]string{"token": token}, &out); err != nil {
-		log.Printf("提升：通知对端降级失败（对端不可达则继续）：%v", err)
+		if errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "请求对端失败") {
+			return errPeerUnreachable
+		}
+		return err
 	}
+	return nil
 }
 
 func (s *Service) StepDown(ctx context.Context) error {
@@ -74,11 +88,11 @@ func (s *Service) StepDown(ctx context.Context) error {
 	s.setDegraded(true)
 	if s.MySQL != nil {
 		if err := s.MySQL.SetReadOnly(ctx, true); err != nil {
-			log.Printf("对端要求降级：MySQL 只读失败：%v", err)
+			return fmt.Errorf("MySQL 只读失败：%w", err)
 		}
 	}
 	if err := s.applyNginxMaintenance(); err != nil {
-		log.Printf("对端要求降级：维护页失败：%v", err)
+		return fmt.Errorf("维护页失败：%w", err)
 	}
 	s.setDetail("对端正在启用主模式，本机已只读并挂维护页，请将本机设为备机")
 	return nil

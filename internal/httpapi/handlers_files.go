@@ -239,14 +239,15 @@ func (s *Server) handleFilesZip(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleFilesCompress(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Paths []string `json:"paths"`
-		Dest  string   `json:"dest"`
+		Paths   []string `json:"paths"`
+		Dest    string   `json:"dest"`
+		Confirm bool     `json:"confirm"`
 	}
 	if err := readJSON(w, r, &in); err != nil {
 		writeErr(w, 400, "invalid", "请求格式错误")
 		return
 	}
-	if err := s.filesSvc().Compress(in.Paths, in.Dest); err != nil {
+	if err := s.filesSvc().Compress(in.Paths, in.Dest, in.Confirm); err != nil {
 		fileErr(w, err)
 		return
 	}

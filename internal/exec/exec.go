@@ -164,28 +164,23 @@ func SystemdLive() bool {
 	return err == nil && st.IsDir()
 }
 
-// ReloadOrStart 有 systemd 时 reload，失败再 start；无 systemd 时执行 fallback（可空）。
-func ReloadOrStart(ctx context.Context, run func(context.Context, time.Duration, ...string) (Result, error), unit string, fallback []string) error {
+// ReloadOrStart 只 reload。已在运行时 start 会空成功，不能用来证明新配置已装上。
+// fallback 保留给调用方签名，不再执行。
+func ReloadOrStart(ctx context.Context, run func(context.Context, time.Duration, ...string) (Result, error), unit string, _ []string) error {
 	if run == nil {
 		run = Run
 	}
-	if SystemdLive() {
-		r, err := run(ctx, 15*time.Second, "/usr/bin/systemctl", "reload", unit)
-		if err == nil {
-			return nil
-		}
-		r2, err2 := run(ctx, 30*time.Second, "/usr/bin/systemctl", "start", unit)
-		if err2 != nil {
-			return fmt.Errorf("systemctl reload/start %s 失败：%s %s", unit, Clip(r.Stderr), Clip(r2.Stderr))
-		}
-		return nil
+	if !SystemdLive() {
+		return fmt.Errorf("无 systemd，无法 reload %s", unit)
 	}
-	if len(fallback) == 0 {
-		return fmt.Errorf("无 systemd，无法启动 %s", unit)
-	}
-	r, err := run(ctx, 30*time.Second, fallback...)
+	r, err := run(ctx, 15*time.Second, "/usr/bin/systemctl", "reload", unit)
 	if err != nil {
-		return fmt.Errorf("启动 %s 失败：%s", unit, Clip(r.Stderr+" "+r.Stdout))
+		return fmt.Errorf("systemctl reload %s 失败：%s", unit, Clip(r.Stderr))
 	}
 	return nil
+}
+
+// RunShell 用 /bin/sh -c 执行一条命令，和系统 cron 到点执行同一条语义。
+func RunShell(ctx context.Context, timeout time.Duration, command string) (Result, error) {
+	return runUnchecked(ctx, timeout, nil, nil, "/bin/sh", "-c", command)
 }

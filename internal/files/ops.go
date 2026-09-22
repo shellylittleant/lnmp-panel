@@ -286,10 +286,10 @@ func (s *Service) Chmod(path, owner, group string, mode os.FileMode, recursive b
 		}
 		return nil
 	}
+	if err := s.rejectProtectedTree(abs); err != nil {
+		return err
+	}
 	if recursive {
-		if err := s.rejectProtectedTree(abs); err != nil {
-			return err
-		}
 		return filepath.Walk(abs, apply)
 	}
 	info, err := os.Lstat(abs)

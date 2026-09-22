@@ -94,6 +94,87 @@ type In struct {
 	Force             bool     `json:"force"`
 }
 
+func (in *In) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	var p struct {
+		SiteKey       string   `json:"site_key"`
+		Name          string   `json:"name"`
+		Domains       []string `json:"domains"`
+		Root          string   `json:"root"`
+		HTTP2         *bool    `json:"http2"`
+		HTTP3         *bool    `json:"http3"`
+		ProxyPass     *string  `json:"proxy_pass"`
+		AccessAllow   []string `json:"access_allow"`
+		Hotlink       []string `json:"hotlink"`
+		BasicAuthFile *string  `json:"basic_auth_file"`
+		Force         bool     `json:"force"`
+	}
+	if err := json.Unmarshal(data, &p); err != nil {
+		return err
+	}
+	*in = In{
+		SiteKey: p.SiteKey, Name: p.Name, Domains: p.Domains, Root: p.Root,
+		HTTP2: p.HTTP2, HTTP3: p.HTTP3, ProxyPass: p.ProxyPass,
+		AccessAllow: p.AccessAllow, Hotlink: p.Hotlink, BasicAuthFile: p.BasicAuthFile,
+		Force: p.Force,
+	}
+	if err := decodeOptString(raw["php_version"], &in.PHPVersion); err != nil {
+		return err
+	}
+	if err := decodeOptID(raw["nginx_template_id"], &in.NginxTemplateID); err != nil {
+		return err
+	}
+	if err := decodeOptID(raw["rewrite_template_id"], &in.RewriteTemplateID); err != nil {
+		return err
+	}
+	if err := decodeOptID(raw["ssl_template_id"], &in.SSLTemplateID); err != nil {
+		return err
+	}
+	return nil
+}
+
+func decodeOptString(raw json.RawMessage, dst **string) error {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return err
+	}
+	*dst = &s
+	return nil
+}
+
+func decodeOptID(raw json.RawMessage, dst **int64) error {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	if string(raw) == `""` {
+		z := int64(0)
+		*dst = &z
+		return nil
+	}
+	var n int64
+	if err := json.Unmarshal(raw, &n); err != nil {
+		return err
+	}
+	*dst = &n
+	return nil
+}
+
+func applyID(cur, in *int64) *int64 {
+	if in == nil {
+		return cur
+	}
+	if *in == 0 {
+		return nil
+	}
+	return in
+}
+
 func (s *Service) List() ([]Site, error) {
 	rows, err := s.db.SQL.Query(`SELECT id FROM sites ORDER BY id`)
 	if err != nil {
@@ -283,96 +364,149 @@ func (s *Service) Update(ctx context.Context, id int64, in In) (Site, error) {
 	if cur.Drifted && !in.Force {
 		return Site{}, ErrDrift
 	}
-	if len(in.Domains) > 0 {
+	next, err := s.merge(id, cur, in)
+	if err != nil {
+		return Site{}, err
+	}
+	content, err := s.render(next)
+	if err != nil {
+		return Site{}, err
+	}
+	old, _ := s.ngx.Read(cur.SiteKey)
+	if err := s.ngx.WriteSite(cur.SiteKey, content); err != nil {
+		return Site{}, err
+	}
+	if next.Enabled {
+		_ = s.ngx.Enable(cur.SiteKey)
+	}
+	if !s.SkipNX {
+		if err := s.ngx.TestAndReload(ctx); err != nil {
+			if old != "" {
+				_ = s.ngx.WriteSite(cur.SiteKey, old)
+			}
+			return Site{}, err
+		}
+	}
+	hash := template.Hash(content)
+	if disk, err := s.ngx.HashOf(cur.SiteKey); err == nil {
+		hash = disk
+	}
+	if err := s.persist(id, next, in.Domains != nil, hash); err != nil {
+		if old != "" {
+			_ = s.ngx.WriteSite(cur.SiteKey, old)
+		}
+		if !s.SkipNX {
+			_ = s.ngx.TestAndReload(ctx)
+		}
+		return Site{}, err
+	}
+	return s.Get(id)
+}
+
+func (s *Service) merge(id int64, cur Site, in In) (Site, error) {
+	next := cur
+	if in.Name != "" {
+		next.Name = in.Name
+	}
+	if in.Root != "" {
+		next.Root = in.Root
+	}
+	if in.Domains != nil {
+		if len(in.Domains) == 0 {
+			return Site{}, fmt.Errorf("域名不能为空")
+		}
+		domains := make([]string, len(in.Domains))
 		for i, d := range in.Domains {
 			d = strings.ToLower(strings.TrimSpace(d))
 			if err := validDomain(d); err != nil {
 				return Site{}, err
 			}
-			in.Domains[i] = d
+			domains[i] = d
 		}
-		if err := s.checkDomains(id, in.Domains); err != nil {
+		if err := s.checkDomains(id, domains); err != nil {
 			return Site{}, err
 		}
+		next.Domains = domains
 	}
-	name, root := cur.Name, cur.Root
-	if in.Name != "" {
-		name = in.Name
-	}
-	if in.Root != "" {
-		root = in.Root
-	}
-	php := cur.PHPVersion
 	if in.PHPVersion != nil {
-		php = in.PHPVersion
+		v := strings.TrimSpace(*in.PHPVersion)
+		if v == "" {
+			next.PHPVersion = nil
+		} else {
+			if !phpVerRe.MatchString(v) {
+				return Site{}, fmt.Errorf("无效 PHP 版本（需要 8.2 及以上）")
+			}
+			next.PHPVersion = &v
+		}
 	}
-	nid, rid, sid := cur.NginxTemplateID, cur.RewriteTemplateID, cur.SSLTemplateID
-	if in.NginxTemplateID != nil {
-		nid = in.NginxTemplateID
-	}
-	nid = s.autoPHPTemplate(nid, php)
-	if in.RewriteTemplateID != nil {
-		rid = in.RewriteTemplateID
-	}
-	if in.SSLTemplateID != nil {
-		sid = in.SSLTemplateID
-	}
-	h2, h3, pp, ba := cur.HTTP2, cur.HTTP3, cur.ProxyPass, cur.BasicAuthFile
+	next.NginxTemplateID = s.autoPHPTemplate(applyID(cur.NginxTemplateID, in.NginxTemplateID), next.PHPVersion)
+	next.RewriteTemplateID = applyID(cur.RewriteTemplateID, in.RewriteTemplateID)
+	next.SSLTemplateID = applyID(cur.SSLTemplateID, in.SSLTemplateID)
 	if in.HTTP2 != nil {
-		h2 = *in.HTTP2
+		next.HTTP2 = *in.HTTP2
 	}
 	if in.HTTP3 != nil {
-		h3 = *in.HTTP3
+		next.HTTP3 = *in.HTTP3
 	}
 	if in.ProxyPass != nil {
-		pp = *in.ProxyPass
+		next.ProxyPass = *in.ProxyPass
 	}
 	if in.BasicAuthFile != nil {
-		ba = *in.BasicAuthFile
+		next.BasicAuthFile = *in.BasicAuthFile
 	}
-	access, hot := cur.AccessAllow, cur.Hotlink
 	if in.AccessAllow != nil {
-		access = in.AccessAllow
+		next.AccessAllow = in.AccessAllow
 	}
 	if in.Hotlink != nil {
-		hot = in.Hotlink
+		next.Hotlink = in.Hotlink
 	}
-	ab, _ := json.Marshal(nz(access))
-	hb, _ := json.Marshal(nz(hot))
-	if err := validRoot(root); err != nil {
+	if err := validRoot(next.Root); err != nil {
 		return Site{}, err
 	}
-	if err := validToken("反代目标", pp); err != nil {
+	if err := validToken("反代目标", next.ProxyPass); err != nil {
 		return Site{}, err
 	}
-	if err := validToken("basic auth 文件", ba); err != nil {
+	if err := validToken("basic auth 文件", next.BasicAuthFile); err != nil {
 		return Site{}, err
 	}
-	for _, x := range access {
+	for _, x := range next.AccessAllow {
 		if err := validToken("访问限制", x); err != nil {
 			return Site{}, err
 		}
 	}
-	for _, x := range hot {
+	for _, x := range next.Hotlink {
 		if err := validToken("防盗链", x); err != nil {
 			return Site{}, err
 		}
 	}
-	_, err = s.db.SQL.Exec(`UPDATE sites SET name=?, root=?, php_version=?, nginx_template_id=?, rewrite_template_id=?, ssl_template_id=?,
-		http2=?, http3=?, proxy_pass=?, access_allow=?, hotlink=?, basic_auth_file=?, updated_at=? WHERE id=?`,
-		name, root, php, nid, rid, sid, boolInt(h2), boolInt(h3), pp, string(ab), string(hb), ba, s.db.Now(), id)
+	return next, nil
+}
+
+func (s *Service) persist(id int64, next Site, replaceDom bool, hash string) error {
+	ab, _ := json.Marshal(nz(next.AccessAllow))
+	hb, _ := json.Marshal(nz(next.Hotlink))
+	tx, err := s.db.SQL.Begin()
 	if err != nil {
-		return Site{}, err
+		return err
 	}
-	if len(in.Domains) > 0 {
-		if err := s.replaceDomains(id, in.Domains); err != nil {
-			return Site{}, err
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`UPDATE sites SET name=?, root=?, php_version=?, nginx_template_id=?, rewrite_template_id=?, ssl_template_id=?,
+		http2=?, http3=?, proxy_pass=?, access_allow=?, hotlink=?, basic_auth_file=?, last_written_hash=?, updated_at=? WHERE id=?`,
+		next.Name, next.Root, next.PHPVersion, next.NginxTemplateID, next.RewriteTemplateID, next.SSLTemplateID,
+		boolInt(next.HTTP2), boolInt(next.HTTP3), next.ProxyPass, string(ab), string(hb), next.BasicAuthFile, hash, s.db.Now(), id); err != nil {
+		return err
+	}
+	if replaceDom {
+		if _, err := tx.Exec(`DELETE FROM site_domains WHERE site_id=?`, id); err != nil {
+			return err
+		}
+		for _, d := range next.Domains {
+			if _, err := tx.Exec(`INSERT INTO site_domains(domain, site_id) VALUES (?,?)`, d, id); err != nil {
+				return err
+			}
 		}
 	}
-	if err := s.apply(ctx, id, false); err != nil {
-		return Site{}, err
-	}
-	return s.Get(id)
+	return tx.Commit()
 }
 
 func (s *Service) Delete(ctx context.Context, id int64, purge bool) error {
@@ -518,6 +652,56 @@ func (s *Service) PutRedirects(ctx context.Context, id int64, rs []Redirect) err
 
 func (s *Service) ApplyConf(ctx context.Context, id int64) error {
 	return s.apply(ctx, id, true)
+}
+
+var (
+	reSSLKey  = regexp.MustCompile(`(?m)^[ \t]*ssl_certificate_key[ \t]+[^;\n]*;`)
+	reSSLCert = regexp.MustCompile(`(?m)^[ \t]*ssl_certificate[ \t]+[^;\n]*;`)
+)
+
+func rewriteCertPaths(body, cert, key string) string {
+	keyLine := "ssl_certificate_key " + key + ";"
+	certLine := "ssl_certificate " + cert + ";"
+	if reSSLKey.MatchString(body) {
+		body = reSSLKey.ReplaceAllString(body, keyLine)
+	} else {
+		body = insertDirective(body, keyLine)
+	}
+	if reSSLCert.MatchString(body) {
+		body = reSSLCert.ReplaceAllString(body, certLine)
+	} else {
+		body = insertDirective(body, certLine)
+	}
+	return body
+}
+
+func insertDirective(body, line string) string {
+	i := strings.Index(body, "server")
+	if i < 0 {
+		return body + "\n" + line + "\n"
+	}
+	brace := strings.Index(body[i:], "{")
+	if brace < 0 {
+		return body + "\n" + line + "\n"
+	}
+	at := i + brace + 1
+	return body[:at] + "\n    " + line + body[at:]
+}
+
+// RetargetCert 续期后写回证书路径。原文模式只改证书指令，不按模板重渲染。
+func (s *Service) RetargetCert(ctx context.Context, id int64, certPath, keyPath string) error {
+	st, err := s.Get(id)
+	if err != nil {
+		return err
+	}
+	if !st.RawMode {
+		return s.ApplyConf(ctx, id)
+	}
+	body, err := s.ngx.Read(st.SiteKey)
+	if err != nil {
+		return err
+	}
+	return s.PutRaw(ctx, id, rewriteCertPaths(body, certPath, keyPath), true)
 }
 
 func (s *Service) render(st Site) (string, error) {

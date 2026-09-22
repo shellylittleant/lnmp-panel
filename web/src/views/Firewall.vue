@@ -9,7 +9,10 @@ const panel = ref(0);
 const policy = ref("drop");
 const publicHTTP = ref(true);
 const openPorts = ref("80, 443");
+const sshPorts = ref<number[]>([]);
+const udpPorts = ref<number[]>([]);
 const allow = ref("");
+const banIP = ref("");
 const content = ref("");
 const drifted = ref(false);
 const rawMode = ref(false);
@@ -28,6 +31,8 @@ async function load() {
   }
   const d = r.data;
   ssh.value = d.form.ssh_port;
+  sshPorts.value = d.form.ssh_ports?.length ? d.form.ssh_ports.slice() : d.form.ssh_port ? [d.form.ssh_port] : [];
+  udpPorts.value = (d.form.udp_ports || []).slice();
   panel.value = d.form.panel_port;
   policy.value = d.form.input_policy;
   publicHTTP.value = d.form.public_http;
@@ -70,9 +75,18 @@ function ports(): number[] {
     .filter((n) => n > 0);
 }
 
+function sshForSave(): number[] {
+  const ports = sshPorts.value.length ? sshPorts.value.slice() : [];
+  if (!ports.length) return ssh.value > 0 ? [ssh.value] : [];
+  ports[0] = ssh.value;
+  return ports;
+}
+
 async function save() {
   const r = await api("PUT", "/firewall", {
     ssh_port: ssh.value,
+    ssh_ports: sshForSave(),
+    udp_ports: udpPorts.value,
     panel_port: panel.value,
     input_policy: policy.value,
     public_http: publicHTTP.value,
@@ -116,6 +130,19 @@ async function confirm() {
   }
   msg.success("已确认，规则保留");
   await load();
+}
+
+async function ban() {
+  const ip = banIP.value.trim();
+  if (!ip) return;
+  if (!window.confirm("封禁 " + ip + "：该地址会立刻被 nftables 拒绝入站，30 分钟后自动解除。")) return;
+  const r = await api("POST", "/firewall/ban", { ip });
+  if (!r.ok) {
+    msg.error(r.error.message);
+    return;
+  }
+  msg.success("已封禁 " + ip + "，30 分钟后解除");
+  banIP.value = "";
 }
 
 async function rollback() {
@@ -171,6 +198,12 @@ async function useTpl() {
           <n-button @click="useTpl">恢复官方模板</n-button>
         </n-space>
       </n-form>
+    </n-card>
+    <n-card title="封禁">
+      <n-space>
+        <n-input v-model:value="banIP" placeholder="IP 地址" style="width: 220px" />
+        <n-button type="error" @click="ban">封禁 30 分钟</n-button>
+      </n-space>
     </n-card>
     <n-card title="规则集原文">
       <n-input v-model:value="content" type="textarea" :autosize="{ minRows: 16 }" />

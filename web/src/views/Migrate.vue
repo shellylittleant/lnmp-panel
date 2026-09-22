@@ -66,6 +66,7 @@ async function haPair() {
 }
 
 async function haPromote() {
+  if (!window.confirm("启用主模式：本机 MySQL 改为可写、站点恢复对外，并立刻改防火墙（不进 60 秒确认）。对端联系不上时可以继续，对端可能仍在服务。对端能连上但降级失败则不会提升。")) return;
   busy.value = "启用主模式";
   try {
     const r = await api("POST", "/ha/promote", {});
@@ -81,6 +82,7 @@ async function haPromote() {
 }
 
 async function haDemote() {
+  if (!window.confirm("降级为备：本机 MySQL 改为只读，站点改为 404，并立刻改防火墙。")) return;
   busy.value = "降级为备";
   try {
     const r = await api("POST", "/ha/demote", {});
@@ -173,7 +175,7 @@ async function cancel() {
     msg.error(r.error.message);
     return;
   }
-  msg.success("已取消并作废临时钥");
+  msg.success("已作废临时钥");
   await loadStatus();
 }
 
@@ -211,8 +213,7 @@ onUnmounted(() => {
           <n-button :disabled="!!busy" @click="preflight">预检</n-button>
           <n-button type="primary" :disabled="!!busy" @click="start('full')">全量同步</n-button>
           <n-button :disabled="!!busy" @click="start('incr')">增量同步</n-button>
-          <n-button type="warning" :disabled="!!busy" @click="cancel">取消并作废钥</n-button>
-          <n-button :disabled="!!busy" @click="cancel">完成迁移</n-button>
+          <n-button type="warning" :disabled="!!busy" @click="cancel">作废临时钥</n-button>
           <span v-if="busy">{{ busy }}…</span>
         </n-space>
       </n-form>

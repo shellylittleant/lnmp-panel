@@ -424,3 +424,46 @@ func TestApplySharedPanelPassword(t *testing.T) {
 		t.Fatal(string(b))
 	}
 }
+
+func TestPromoteRefusesWhenStepDownFails(t *testing.T) {
+	s := setupHA(t)
+	s.MySQL = nil
+	if err := s.saveRole(RoleStandby, 0, 1); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Settings.Set("ha_peer_address", "https://peer.example:18443/pfx")
+	_ = s.Settings.Set("ha_peer_fingerprint", "aa")
+	_ = s.Settings.Set("ha_machine_token", "tok")
+	s.Migrate.HTTPDo = func(req *http.Request) (*http.Response, error) {
+		body := `{"ok":false,"error":{"message":"MySQL 只读失败"}}`
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+	}
+	err := s.Promote(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "只读失败") {
+		t.Fatalf("可达但降级失败应拒绝提升：%v", err)
+	}
+	st, _ := s.loadState()
+	if st.Role != RoleStandby {
+		t.Fatalf("角色不应变：%s", st.Role)
+	}
+}
+
+func TestPromoteAllowsUnreachablePeer(t *testing.T) {
+	s := setupHA(t)
+	s.MySQL = nil
+	if err := s.saveRole(RoleStandby, 0, 1); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Settings.Set("ha_peer_address", "https://peer.example:18443/pfx")
+	_ = s.Settings.Set("ha_peer_fingerprint", "aa")
+	s.Migrate.HTTPDo = func(req *http.Request) (*http.Response, error) {
+		return nil, os.ErrDeadlineExceeded
+	}
+	if err := s.Promote(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := s.loadState()
+	if st.Role != RoleMaster {
+		t.Fatalf("对端不可达应允许提升，got %s", st.Role)
+	}
+}

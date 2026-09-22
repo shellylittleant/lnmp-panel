@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { NButton, NCard, NForm, NFormItem, NInput, NSelect, NSpace, NTabPane, NTabs, useMessage } from "naive-ui";
+import { NButton, NCard, NDataTable, NForm, NFormItem, NInput, NSelect, NSpace, NTabPane, NTabs, useMessage } from "naive-ui";
+import type { DataTableColumns } from "naive-ui";
 import QRCode from "qrcode";
 import { api } from "../api";
 import EnvInstall from "./EnvInstall.vue";
@@ -23,6 +24,16 @@ const totpUri = ref("");
 const totpImg = ref("");
 const totpCode = ref("");
 const totpPw = ref("");
+const totpOffCode = ref("");
+type SessionRow = { id: string; ip: string; user_agent: string; created_at: string; expires_at: string; current: boolean };
+const sessions = ref<SessionRow[]>([]);
+const sessionCols: DataTableColumns<SessionRow> = [
+  { title: "来源", key: "ip", width: 140 },
+  { title: "浏览器", key: "user_agent" },
+  { title: "创建", key: "created_at", width: 180 },
+  { title: "过期", key: "expires_at", width: 180 },
+  { title: "", key: "current", width: 80, render: (r) => (r.current ? "当前" : "") },
+];
 
 onMounted(async () => {
   const s = await api<{ bind_mode: string; ops_ip_cidrs: string[] }>("GET", "/settings");
@@ -32,7 +43,29 @@ onMounted(async () => {
   }
   const sess = await api<{ totp_enabled: boolean }>("GET", "/auth/session");
   if (sess.ok) totpOn.value = sess.data.totp_enabled;
+  await loadSessions();
 });
+
+async function loadSessions() {
+  const r = await api<{ items: SessionRow[] }>("GET", "/auth/sessions");
+  if (r.ok) sessions.value = r.data.items || [];
+}
+
+async function kick(row: SessionRow) {
+  const tip = row.current ? "踢掉当前会话后需要重新登录。" : "踢掉来自 " + row.ip + " 的会话。";
+  if (!window.confirm(tip)) return;
+  const r = await api("DELETE", "/auth/sessions/" + row.id, {});
+  if (!r.ok) {
+    msg.error(r.error.message);
+    return;
+  }
+  if (row.current) {
+    await router.replace("/login");
+    return;
+  }
+  msg.success("已踢下线");
+  await loadSessions();
+}
 
 async function save() {
   const cidrs = ops.value
@@ -79,18 +112,21 @@ async function enableTotp() {
     return;
   }
   totpOn.value = true;
-  msg.success("已开启 TOTP");
+  msg.success("已开启 TOTP，其他会话已退出");
+  await loadSessions();
 }
 
 async function disableTotp() {
-  const r = await api("POST", "/auth/totp/disable", { password: totpPw.value });
+  const r = await api("POST", "/auth/totp/disable", { password: totpPw.value, code: totpOffCode.value });
   if (!r.ok) {
     msg.error(r.error.message);
     return;
   }
   totpOn.value = false;
   totpImg.value = "";
-  msg.success("已关闭 TOTP");
+  msg.success("已关闭 TOTP，其他会话已退出");
+  totpOffCode.value = "";
+  await loadSessions();
 }
 
 async function restart() {
@@ -126,6 +162,12 @@ async function restart() {
         <n-button style="margin-left: 8px" @click="restart">重启面板</n-button>
       </n-form>
     </n-card>
+    <n-card title="会话">
+      <n-data-table :columns="sessionCols" :data="sessions" :row-key="(r: SessionRow) => r.id" />
+      <n-space style="margin-top: 8px">
+        <n-button v-for="s in sessions" :key="s.id" size="small" @click="kick(s)">踢掉 {{ s.current ? "当前会话" : s.ip }}</n-button>
+      </n-space>
+    </n-card>
     <n-card title="修改密码">
       <n-form>
         <n-form-item label="旧密码"><n-input v-model:value="oldPw" type="password" /></n-form-item>
@@ -142,6 +184,7 @@ async function restart() {
         <n-input v-model:value="totpCode" placeholder="验证码" style="max-width: 200px" />
         <n-button type="primary" @click="enableTotp">启用</n-button>
         <n-input v-model:value="totpPw" type="password" placeholder="登录密码（关闭时需要）" style="max-width: 240px" />
+        <n-input v-model:value="totpOffCode" placeholder="当前验证码（关闭时需要）" style="max-width: 240px" />
         <n-button @click="disableTotp">关闭 TOTP</n-button>
       </n-space>
     </n-card>

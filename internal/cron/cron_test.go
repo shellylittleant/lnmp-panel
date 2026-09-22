@@ -112,6 +112,39 @@ func TestCrontabEscapePercent(t *testing.T) {
 	}
 }
 
+func TestCrontabReadFailureDoesNotWrite(t *testing.T) {
+	dir := t.TempDir()
+	db, err := store.Open(filepath.Join(dir, "p.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := New(db)
+	wrote := false
+	s.Runner = func(ctx context.Context, d time.Duration, argv ...string) (exec.Result, error) {
+		return exec.Result{Stderr: "permission denied"}, fmt.Errorf("exit 1")
+	}
+	s.IORunner = func(ctx context.Context, d time.Duration, stdin io.Reader, argv ...string) (exec.Result, error) {
+		wrote = true
+		return exec.Result{}, nil
+	}
+	if _, err := s.Create(context.Background(), "ping", "*/5 * * * *", "/usr/bin/true", true); err == nil {
+		t.Fatal("读取失败应拒绝写入")
+	}
+	if wrote {
+		t.Fatal("读取失败不应调用 crontab -")
+	}
+	s.Runner = func(ctx context.Context, d time.Duration, argv ...string) (exec.Result, error) {
+		return exec.Result{Stderr: "no crontab for root"}, fmt.Errorf("exit 1")
+	}
+	if _, err := s.Create(context.Background(), "ping", "*/5 * * * *", "/usr/bin/true", true); err != nil {
+		t.Fatal(err)
+	}
+	if !wrote {
+		t.Fatal("no crontab 应继续写入")
+	}
+}
+
 func TestStripPanelBlock(t *testing.T) {
 	in := "MAILTO=root\n" + beginMark + "\n* * * * * /usr/bin/true\n" + endMark + "\n# keep\n"
 	out := stripPanelBlock(in)

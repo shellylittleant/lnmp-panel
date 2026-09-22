@@ -423,8 +423,11 @@ func TestTOTPLogin(t *testing.T) {
 		t.Fatalf("应要求 TOTP：%s", login.Data)
 	}
 	ticket, _ := lr["ticket"].(string)
-	codeNow, _ = totp.GenerateCode(st.Secret, time.Now().UTC())
-	code, ver := doJSON(t, c2, "POST", api+"/auth/totp/verify", "", map[string]string{"ticket": ticket, "code": codeNow})
+	codeNext, err := totp.GenerateCode(st.Secret, time.Now().UTC().Add(30*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, ver := doJSON(t, c2, "POST", api+"/auth/totp/verify", "", map[string]string{"ticket": ticket, "code": codeNext})
 	if code != 200 || !ver.OK {
 		t.Fatalf("totp verify %d %+v", code, ver)
 	}
@@ -746,8 +749,16 @@ func TestStandbyRejectsWrites(t *testing.T) {
 		t.Fatalf("cron %d %+v", code, e)
 	}
 	code, e = doJSON(t, client, "POST", api+"/php/versions/8.3/extensions", csrf, map[string]any{"name": "xdebug"})
+	if code == 409 {
+		t.Fatalf("备机应允许环境安装，得到 %d %+v", code, e)
+	}
+	code, e = doJSON(t, client, "POST", api+"/templates", csrf, map[string]any{"type": "nginx_site", "name": "x", "content": "server {}"})
 	if code != 409 {
-		t.Fatalf("php %d %+v", code, e)
+		t.Fatalf("模板库 %d %+v", code, e)
+	}
+	code, e = doJSON(t, client, "PUT", api+"/logs/rotate", csrf, map[string]any{"keep_days": 7, "max_size": "10M"})
+	if code != 409 {
+		t.Fatalf("日志轮转 %d %+v", code, e)
 	}
 	code, e = doJSON(t, client, "GET", api+"/sites", csrf, nil)
 	if code != 200 || !e.OK {

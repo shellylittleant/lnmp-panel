@@ -31,11 +31,8 @@ func TestTOTPReplayRejected(t *testing.T) {
 	if err := s.EnableTOTP(code); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.checkTOTP(code); err != nil {
-		t.Fatal(err)
-	}
 	if err := s.checkTOTP(code); err != ErrBadTOTP {
-		t.Fatalf("同一时间片应拒绝重放，得到 %v", err)
+		t.Fatalf("开启用过的验证码应在本时间窗失效，得到 %v", err)
 	}
 }
 

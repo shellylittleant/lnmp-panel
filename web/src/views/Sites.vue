@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, h, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { NAlert, NButton, NCard, NDataTable, NInput, NForm, NFormItem, NSpace, NTabPane, NTabs, useMessage } from "naive-ui";
 import type { DataTableColumns } from "naive-ui";
@@ -25,6 +25,22 @@ const columns: DataTableColumns<Row> = [
   { title: "域名", key: "domains", render: (r) => (r.domains || []).join(", ") },
   { title: "启用", key: "enabled", render: (r) => (r.enabled ? "是" : "否") },
   { title: "漂移", key: "drifted", render: (r) => (r.drifted ? "是" : "") },
+  {
+    title: "操作",
+    key: "op",
+    render: (r) =>
+      h(
+        NButton,
+        {
+          size: "small",
+          onClick: (e: Event) => {
+            e.stopPropagation();
+            void toggle(r);
+          },
+        },
+        { default: () => (r.enabled ? "停用" : "启用") },
+      ),
+  },
 ];
 
 async function load() {
@@ -52,6 +68,21 @@ async function create() {
 
 function goRow(r: Row) {
   router.push("/sites/" + r.id);
+}
+
+async function toggle(r: Row) {
+  const on = !r.enabled;
+  const tip = on
+    ? "启用 " + r.name + "：站点恢复对外，Nginx 会重载。"
+    : "停用 " + r.name + "：站点不再对外，Nginx 会重载。";
+  if (!window.confirm(tip)) return;
+  const r2 = await api("POST", "/sites/" + r.id + (on ? "/enable" : "/disable"), {});
+  if (!r2.ok) {
+    msg.error(r2.error.message);
+    return;
+  }
+  msg.success(on ? "已启用" : "已停用");
+  await load();
 }
 </script>
 

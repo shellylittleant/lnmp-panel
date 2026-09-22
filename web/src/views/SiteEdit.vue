@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { NAlert, NButton, NCard, NCheckbox, NForm, NFormItem, NInput, NSelect, NSpace, useMessage } from "naive-ui";
+import { NAlert, NButton, NCard, NCheckbox, NForm, NFormItem, NInput, NInputNumber, NSelect, NSpace, useMessage } from "naive-ui";
 import { api } from "../api";
 
 const route = useRoute();
@@ -22,6 +22,8 @@ const tpls = ref<{ label: string; value: number }[]>([]);
 const nginxTpl = ref<number | null>(null);
 const rewriteTpl = ref<number | null>(null);
 const phpOpts = ref<{ label: string; value: string }[]>([{ label: "静态（无 PHP）", value: "" }]);
+type Redirect = { from_path: string; to_url: string; code: number };
+const redirects = ref<Redirect[]>([]);
 
 onMounted(async () => {
   const pv = await api<{ items: { version: string; installed: boolean }[] }>("GET", "/php/versions");
@@ -54,6 +56,8 @@ onMounted(async () => {
   rewriteTpl.value = d.rewrite_template_id;
   const n = await api<{ content: string }>("GET", "/sites/" + id + "/nginx");
   if (n.ok) conf.value = n.data.content;
+  const rd = await api<{ items: Redirect[] }>("GET", "/sites/" + id + "/redirects");
+  if (rd.ok) redirects.value = rd.data.items || [];
 });
 
 async function save() {
@@ -61,11 +65,11 @@ async function save() {
     name: name.value,
     domains: domains.value.split(",").map((x) => x.trim()).filter(Boolean),
     root: root.value,
-    php_version: php.value || null,
+    php_version: php.value,
     proxy_pass: proxy.value,
     http2: http2.value,
-    nginx_template_id: nginxTpl.value,
-    rewrite_template_id: rewriteTpl.value,
+    nginx_template_id: nginxTpl.value ?? "",
+    rewrite_template_id: rewriteTpl.value ?? "",
     force: force.value,
   });
   if (!r.ok) {
@@ -97,6 +101,7 @@ async function useTpl() {
 }
 
 async function issue() {
+  if (!window.confirm("将删除当前证书并重新签发，成功后立刻重载 Nginx。原文模式下只改证书路径，不重写整份配置。")) return;
   const r = await api("POST", "/sites/" + id + "/ssl/issue", {});
   if (!r.ok) {
     msg.error(r.error.message);
@@ -109,6 +114,7 @@ const certPem = ref("");
 const keyPem = ref("");
 
 async function importManual() {
+  if (!window.confirm("将覆盖该站点现有证书和私钥，并立刻改 Nginx 配置。")) return;
   const r = await api<{ warning?: string }>("POST", "/sites/" + id + "/ssl/import", { cert_pem: certPem.value, key_pem: keyPem.value });
   if (!r.ok) {
     msg.error(r.error.message);
@@ -119,12 +125,26 @@ async function importManual() {
 }
 
 async function del() {
+  if (!window.confirm("删除站点 " + name.value + "：会删除 Nginx 配置和证书，网站目录默认保留。")) return;
   const r = await api("DELETE", "/sites/" + id, undefined);
   if (!r.ok) {
     msg.error(r.error.message);
     return;
   }
   router.push("/sites");
+}
+
+function addRedirect() {
+  redirects.value.push({ from_path: "/", to_url: "https://", code: 301 });
+}
+
+async function saveRedirects() {
+  const r = await api("PUT", "/sites/" + id + "/redirects", { items: redirects.value });
+  if (!r.ok) {
+    msg.error(r.error.message);
+    return;
+  }
+  msg.success("跳转已保存");
 }
 </script>
 
@@ -167,6 +187,19 @@ async function del() {
       <n-form-item label="证书链"><n-input v-model:value="certPem" type="textarea" :autosize="{ minRows: 6 }" /></n-form-item>
       <n-form-item label="私钥"><n-input v-model:value="keyPem" type="textarea" :autosize="{ minRows: 6 }" /></n-form-item>
       <n-button @click="importManual">保存手动证书</n-button>
+    </n-card>
+    <n-card title="301 / 跳转">
+      <p v-if="rawMode">原文模式下不能改跳转，请先恢复为模板渲染。</p>
+      <n-space v-for="(rd, i) in redirects" :key="i" style="margin-bottom: 8px">
+        <n-input v-model:value="rd.from_path" placeholder="来源路径" :disabled="rawMode" style="width: 160px" />
+        <n-input v-model:value="rd.to_url" placeholder="目标 URL" :disabled="rawMode" style="width: 280px" />
+        <n-input-number v-model:value="rd.code" :min="301" :max="308" :disabled="rawMode" />
+        <n-button :disabled="rawMode" @click="redirects.splice(i, 1)">删除</n-button>
+      </n-space>
+      <n-space>
+        <n-button :disabled="rawMode" @click="addRedirect">添加</n-button>
+        <n-button type="primary" :disabled="rawMode" @click="saveRedirects">保存跳转</n-button>
+      </n-space>
     </n-card>
     <n-card title="nginx conf 原文">
       <n-input v-model:value="conf" type="textarea" :autosize="{ minRows: 16 }" />

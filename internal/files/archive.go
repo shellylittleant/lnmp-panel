@@ -97,7 +97,7 @@ func (s *Service) ZipTo(w io.Writer, paths []string) error {
 	return nil
 }
 
-func (s *Service) Compress(paths []string, dest string) error {
+func (s *Service) Compress(paths []string, dest string, confirm bool) error {
 	for _, p := range paths {
 		abs, err := s.Resolve(p)
 		if err != nil {
@@ -113,6 +113,9 @@ func (s *Service) Compress(paths []string, dest string) error {
 	}
 	if err := os.MkdirAll(filepath.Dir(abs), 0755); err != nil {
 		return err
+	}
+	if _, err := os.Lstat(abs); err == nil && !confirm {
+		return ErrExists
 	}
 	f, err := os.Create(abs)
 	if err != nil {
@@ -144,6 +147,21 @@ func (s *Service) Unzip(archive, dest string, confirm bool) error {
 	if err != nil {
 		return err
 	}
+	resolved, err := filepath.EvalSymlinks(absDest)
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return ErrNotDir
+	}
+	if s.ContainsProtected(resolved) {
+		return ErrContains
+	}
+	absDest = resolved
 	st, err := os.Lstat(src)
 	if err != nil {
 		return ErrNotFound
@@ -168,19 +186,26 @@ func (s *Service) unzipZip(src, dest string, confirm bool) error {
 		return err
 	}
 	defer zr.Close()
+	var fresh []string
 	for _, f := range zr.File {
 		target, err := s.safeExtract(dest, f.Name)
 		if err != nil {
 			return err
 		}
 		if f.FileInfo().IsDir() {
-			_ = os.MkdirAll(target, 0755)
+			if err := mkdirFresh(target, &fresh); err != nil {
+				return err
+			}
 			continue
 		}
 		if _, err := os.Lstat(target); err == nil && !confirm {
 			return ErrExists
 		}
-		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+		existed := false
+		if _, err := os.Lstat(target); err == nil {
+			existed = true
+		}
+		if err := mkdirFresh(filepath.Dir(target), &fresh); err != nil {
 			return err
 		}
 		rc, err := f.Open()
@@ -198,12 +223,16 @@ func (s *Service) unzipZip(src, dest string, confirm bool) error {
 		if err != nil {
 			return err
 		}
+		if !existed {
+			fresh = append(fresh, target)
+		}
 	}
-	chownWWWWalk(dest)
+	ownFresh(fresh)
 	return nil
 }
 
 func (s *Service) unzipTarGz(src, dest string, confirm bool) error {
+	var fresh []string
 	f, err := os.Open(src)
 	if err != nil {
 		return err
@@ -229,12 +258,18 @@ func (s *Service) unzipTarGz(src, dest string, confirm bool) error {
 		}
 		switch hdr.Typeflag {
 		case tar.TypeDir:
-			_ = os.MkdirAll(target, 0755)
+			if err := mkdirFresh(target, &fresh); err != nil {
+				return err
+			}
 		case tar.TypeReg:
 			if _, err := os.Lstat(target); err == nil && !confirm {
 				return ErrExists
 			}
-			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+			existed := false
+			if _, err := os.Lstat(target); err == nil {
+				existed = true
+			}
+			if err := mkdirFresh(filepath.Dir(target), &fresh); err != nil {
 				return err
 			}
 			out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
@@ -246,9 +281,12 @@ func (s *Service) unzipTarGz(src, dest string, confirm bool) error {
 			if err != nil {
 				return err
 			}
+			if !existed {
+				fresh = append(fresh, target)
+			}
 		}
 	}
-	chownWWWWalk(dest)
+	ownFresh(fresh)
 	return nil
 }
 
@@ -260,8 +298,81 @@ func (s *Service) safeExtract(dest, name string) (string, error) {
 	if !within(dest, target) {
 		return "", ErrZipSlip
 	}
+	ancestor := existingAncestor(target)
+	if resolved, err := filepath.EvalSymlinks(ancestor); err == nil {
+		if !within(dest, resolved) && resolved != filepath.Clean(dest) {
+			return "", ErrZipSlip
+		}
+		if ancestor != target {
+			rest, err := filepath.Rel(ancestor, target)
+			if err != nil {
+				return "", err
+			}
+			target = filepath.Join(resolved, rest)
+		}
+	}
+	if !within(dest, target) && target != filepath.Clean(dest) {
+		return "", ErrZipSlip
+	}
 	if s.Forbidden(target) {
 		return "", ErrForbidden
 	}
 	return target, nil
+}
+
+func existingAncestor(p string) string {
+	for {
+		if _, err := os.Lstat(p); err == nil {
+			return p
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return p
+		}
+		p = parent
+	}
+}
+
+func mkdirFresh(path string, fresh *[]string) error {
+	var created []string
+	cur := path
+	for {
+		if _, err := os.Lstat(cur); err == nil {
+			break
+		}
+		created = append(created, cur)
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			break
+		}
+		cur = parent
+	}
+	if len(created) == 0 {
+		return nil
+	}
+	if err := os.MkdirAll(path, 0755); err != nil {
+		return err
+	}
+	*fresh = append(*fresh, created...)
+	return nil
+}
+
+func ownFresh(paths []string) {
+	seen := map[string]bool{}
+	for _, p := range paths {
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		chownWWWData(p)
+		info, err := os.Lstat(p)
+		if err != nil {
+			continue
+		}
+		if info.IsDir() {
+			_ = os.Chmod(p, 0755)
+		} else if info.Mode().IsRegular() {
+			_ = os.Chmod(p, 0644)
+		}
+	}
 }

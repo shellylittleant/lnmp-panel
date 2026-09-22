@@ -185,20 +185,31 @@ func (s *Server) handleTOTPEnable(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "invalid", "验证码错误")
 		return
 	}
+	if sess, err := s.sessionFrom(r); err == nil {
+		_ = s.Auth.InvalidateOtherSessions(sess.ID)
+	}
 	writeOK(w, map[string]any{})
 }
 
 func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Password string `json:"password"`
+		Code     string `json:"code"`
 	}
 	if err := readJSON(w, r, &in); err != nil {
 		writeErr(w, 400, "invalid", "请求格式错误")
 		return
 	}
-	if err := s.Auth.DisableTOTP(in.Password); err != nil {
+	if err := s.Auth.DisableTOTP(in.Password, in.Code); err != nil {
+		if errors.Is(err, auth.ErrBadTOTP) {
+			writeErr(w, 400, "invalid", "验证码错误")
+			return
+		}
 		writeErr(w, 401, "unauthorized", "密码错误")
 		return
+	}
+	if sess, err := s.sessionFrom(r); err == nil {
+		_ = s.Auth.InvalidateOtherSessions(sess.ID)
 	}
 	writeOK(w, map[string]any{})
 }

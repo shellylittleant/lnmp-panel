@@ -577,6 +577,7 @@ func (s *Service) Apply(ctx context.Context, force bool) error {
 	deadline := time.Now().UTC().Add(s.Window).Format(time.RFC3339)
 	_, err := s.db.SQL.Exec(`UPDATE firewall_state SET pending_backup=?, confirm_deadline=? WHERE id=1`, bak, deadline)
 	if err != nil {
+		_ = s.loadFile(ctx, bak)
 		return err
 	}
 	s.startTimer()
@@ -594,9 +595,19 @@ func (s *Service) startTimer() {
 		t := time.NewTimer(w)
 		defer t.Stop()
 		select {
-		case <-t.C:
-			_ = s.Rollback(context.Background())
 		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		for {
+			if err := s.Rollback(context.Background()); err == nil {
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(5 * time.Second):
+			}
 		}
 	}()
 }
@@ -629,18 +640,20 @@ func (s *Service) Rollback(ctx context.Context) error {
 	if pending == "" && deadline == "" {
 		return fmt.Errorf("没有可回滚的规则")
 	}
-	if s.cancel != nil {
-		s.cancel()
-		s.cancel = nil
-	}
 	if pending != "" {
 		if err := s.loadFile(ctx, pending); err != nil {
 			return err
 		}
 	}
-	_, err := s.db.SQL.Exec(`UPDATE firewall_state SET pending_backup=NULL, confirm_deadline=NULL WHERE id=1`)
+	if _, err := s.db.SQL.Exec(`UPDATE firewall_state SET pending_backup=NULL, confirm_deadline=NULL WHERE id=1`); err != nil {
+		return err
+	}
 	s.clearMigratePending()
-	return err
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
+	return nil
 }
 
 func (s *Service) checkFile(ctx context.Context, path string) error {

@@ -149,7 +149,7 @@ func (s *Service) Issue(ctx context.Context, siteID int64) error {
 	if err := tx.Commit(); err != nil {
 		return err
 	}
-	return s.sites.ApplyConf(ctx, siteID)
+	return s.sites.RetargetCert(ctx, siteID, certPath, keyPath)
 }
 
 func LeafNotAfter(certPEM []byte) (time.Time, error) {

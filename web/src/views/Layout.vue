@@ -84,7 +84,7 @@ function go(key: string) {
         </n-space>
       </div>
       <n-alert v-if="haRole === 'standby'" type="warning" :bordered="false" class="ha-banner">
-        本机为备机，配置由主机同步
+        站点、数据库、文件、定时任务由主机同步，本机不可改；防火墙、设置、环境安装为本机独立配置
       </n-alert>
       <n-layout-content content-style="padding: 20px">
         <router-view />
