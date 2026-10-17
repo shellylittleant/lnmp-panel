@@ -1,0 +1,59 @@
+flush ruleset
+
+table inet lnmp_panel {
+	set login_ban {
+		type ipv4_addr
+		flags timeout
+		timeout 30m
+	}
+	set login_ban6 {
+		type ipv6_addr
+		flags timeout
+		timeout 30m
+	}
+	set allow_ips {
+		type ipv4_addr
+		flags interval
+{{if .AllowCIDRs}}		elements = { {{join .AllowCIDRs ", "}} }
+{{end}}	}
+	set peer_ips {
+		type ipv4_addr
+		flags interval
+{{if .PeerCIDRv4}}		elements = { {{join .PeerCIDRv4 ", "}} }
+{{end}}	}
+	set peer_ips6 {
+		type ipv6_addr
+		flags interval
+{{if .PeerCIDRv6}}		elements = { {{join .PeerCIDRv6 ", "}} }
+{{end}}	}
+
+	chain input {
+		type filter hook input priority 0; policy {{.InputPolicy}};
+		ct state established,related accept
+		ct state invalid drop
+		meta l4proto { icmp, ipv6-icmp } accept
+		iif lo accept
+		ip saddr @login_ban drop
+		ip6 saddr @login_ban6 drop
+{{range .SSHPorts}}		tcp dport {{.}} accept comment "ssh"
+{{end}}		tcp dport {{.PanelPort}} accept comment "panel"
+{{if .PublicHTTP}}		tcp dport { 80, 443 } accept
+{{end}}{{if .MySQLPort}}{{if .PeerCIDRv4}}		tcp dport {{.MySQLPort}} ip saddr @peer_ips accept comment "mysql-repl"
+{{end}}{{if .PeerCIDRv6}}		tcp dport {{.MySQLPort}} ip6 saddr @peer_ips6 accept comment "mysql-repl"
+{{end}}{{end}}{{if .PeerCIDRv4}}		tcp dport {{.PanelPort}} ip saddr @peer_ips accept comment "panel-peer"
+{{end}}{{if .PeerCIDRv6}}		tcp dport {{.PanelPort}} ip6 saddr @peer_ips6 accept comment "panel-peer"
+{{end}}{{if .PeerCIDRv4}}{{range .SSHPorts}}		tcp dport {{.}} ip saddr @peer_ips accept comment "ssh-peer"
+{{end}}{{end}}{{if .PeerCIDRv6}}{{range .SSHPorts}}		tcp dport {{.}} ip6 saddr @peer_ips6 accept comment "ssh-peer"
+{{end}}{{end}}{{range .OpenPorts}}		tcp dport {{.}} accept
+{{end}}{{range .UDPPorts}}		udp dport {{.}} accept
+{{end}}{{if .AllowCIDRs}}		ip saddr @allow_ips accept
+{{end}}	}
+
+	chain forward {
+		type filter hook forward priority 0; policy drop;
+	}
+
+	chain output {
+		type filter hook output priority 0; policy accept;
+	}
+}

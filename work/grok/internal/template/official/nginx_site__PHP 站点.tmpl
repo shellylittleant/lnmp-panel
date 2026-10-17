@@ -1,0 +1,74 @@
+server {
+    listen 80;
+    server_name {{join .Domains " "}};
+    access_log /var/log/nginx/{{.SiteKey}}.access.log lnmp_panel;
+    error_log /var/log/nginx/{{.SiteKey}}.error.log;
+    location /.well-known/acme-challenge/ {
+        alias /var/www/.acme-challenge/;
+        default_type text/plain;
+    }
+{{if .SSLCert}}    location / {
+        return 301 https://$host$request_uri;
+    }
+{{else}}    root {{.Root}};
+{{if .PHPSocket}}    index index.php;
+{{else}}    index index.php index.html;
+{{end}}
+{{if .AccessAllow}}{{range .AccessAllow}}    allow {{.}};
+{{end}}    deny all;
+{{end}}{{if .BasicAuthFile}}    auth_basic "restricted";
+    auth_basic_user_file {{.BasicAuthFile}};
+{{end}}{{range .Redirects}}    location = {{.FromPath}} { return {{.Code}} {{.ToURL}}; }
+{{end}}{{if .PHPSocket}}    location = / {
+        rewrite ^ /index.php last;
+    }
+{{end}}{{if .Rewrite}}
+{{indent 4 .Rewrite}}
+{{else}}    location / {
+{{if .PHPSocket}}        try_files $uri /index.php?$query_string;
+{{else}}        try_files $uri $uri/ =404;
+{{end}}    }
+{{end}}{{if .PHPSocket}}    location ~ \.php$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:{{.PHPSocket}};
+    }
+{{end}}{{if .Hotlink}}    location ~* \.(gif|jpg|jpeg|png|webp)$ {
+        valid_referers none blocked server_names {{join .Hotlink " "}};
+        if ($invalid_referer) { return 403; }
+    }
+{{end}}{{end}}}
+{{if .SSLCert}}
+server {
+    listen 443 ssl{{if .HTTP2}} http2{{end}};
+    server_name {{join .Domains " "}};
+    root {{.Root}};
+{{if .PHPSocket}}    index index.php;
+{{else}}    index index.php index.html;
+{{end}}
+    access_log /var/log/nginx/{{.SiteKey}}.access.log lnmp_panel;
+    error_log /var/log/nginx/{{.SiteKey}}.error.log;
+{{indent 4 .SSLSnippet}}
+{{if .AccessAllow}}{{range .AccessAllow}}    allow {{.}};
+{{end}}    deny all;
+{{end}}{{if .BasicAuthFile}}    auth_basic "restricted";
+    auth_basic_user_file {{.BasicAuthFile}};
+{{end}}{{range .Redirects}}    location = {{.FromPath}} { return {{.Code}} {{.ToURL}}; }
+{{end}}{{if .PHPSocket}}    location = / {
+        rewrite ^ /index.php last;
+    }
+{{end}}{{if .Rewrite}}
+{{indent 4 .Rewrite}}
+{{else}}    location / {
+{{if .PHPSocket}}        try_files $uri /index.php?$query_string;
+{{else}}        try_files $uri $uri/ =404;
+{{end}}    }
+{{end}}{{if .PHPSocket}}    location ~ \.php$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:{{.PHPSocket}};
+    }
+{{end}}{{if .Hotlink}}    location ~* \.(gif|jpg|jpeg|png|webp)$ {
+        valid_referers none blocked server_names {{join .Hotlink " "}};
+        if ($invalid_referer) { return 403; }
+    }
+{{end}}}
+{{end}}

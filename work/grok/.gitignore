@@ -1,0 +1,9 @@
+.DS_Store
+*.swp
+*.tmp
+/bin/
+/web/node_modules/
+coverage/
+.env
+*.db
+*.db-journal

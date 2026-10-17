@@ -1,0 +1,186 @@
+package exec
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+var allow = map[string]struct{}{
+	"/usr/bin/systemctl":          {},
+	"/usr/sbin/nginx":             {},
+	"/usr/bin/apt-get":            {},
+	"/usr/bin/apt-cache":          {},
+	"/usr/bin/dpkg-query":         {},
+	"/usr/bin/add-apt-repository": {},
+	"/usr/bin/mysql":              {},
+	"/usr/bin/mysqldump":          {},
+	"/usr/bin/mysqladmin":         {},
+	"/usr/sbin/mysqld":            {},
+	"/usr/sbin/nft":               {},
+	"/usr/bin/rsync":              {},
+	"/usr/bin/ssh":                {},
+	"/usr/bin/ssh-keygen":         {},
+	"/usr/sbin/logrotate":         {},
+	"/usr/bin/crontab":            {},
+	"/usr/bin/journalctl":         {},
+}
+
+func allowed(bin string) bool {
+	if _, ok := allow[bin]; ok {
+		return true
+	}
+	// php-fpm8.x，x>=2
+	const pfx = "/usr/sbin/php-fpm8."
+	if strings.HasPrefix(bin, pfx) && len(bin) > len(pfx) {
+		return true
+	}
+	return false
+}
+
+type Result struct {
+	Stdout string
+	Stderr string
+}
+
+func Run(ctx context.Context, timeout time.Duration, argv ...string) (Result, error) {
+	return RunIO(ctx, timeout, nil, argv...)
+}
+
+func RunIO(ctx context.Context, timeout time.Duration, stdin io.Reader, argv ...string) (Result, error) {
+	var out bytes.Buffer
+	r, err := RunTo(ctx, timeout, stdin, &out, argv...)
+	r.Stdout = out.String()
+	return r, err
+}
+
+// RunTo 把 stdout 直接写到 w，不在内存里攒整份输出。stderr 仍采集。
+func RunTo(ctx context.Context, timeout time.Duration, stdin io.Reader, stdout io.Writer, argv ...string) (Result, error) {
+	var r Result
+	if len(argv) == 0 {
+		return r, fmt.Errorf("空命令")
+	}
+	if !allowed(argv[0]) {
+		return r, fmt.Errorf("命令不在白名单：%s", argv[0])
+	}
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	var errb bytes.Buffer
+	if stdout != nil {
+		cmd.Stdout = stdout
+	}
+	cmd.Stderr = &errb
+	if stdin != nil {
+		cmd.Stdin = stdin
+	}
+	cmd.Env = append(os.Environ(),
+		"DEBIAN_FRONTEND=noninteractive",
+		"NEEDRESTART_MODE=a",
+		"APT_LISTCHANGES_FRONTEND=none",
+	)
+	err := cmd.Run()
+	r.Stderr = errb.String()
+	if err != nil {
+		return r, fmt.Errorf("%s：%w", argv[0], err)
+	}
+	return r, nil
+}
+
+var cronDenied = map[string]struct{}{
+	"sh": {}, "bash": {}, "dash": {}, "zsh": {},
+	"docker": {}, "ufw": {}, "iptables": {}, "pecl": {}, "apache2": {},
+}
+
+// CronDenied 是否在误操作禁止名单。不是安全边界，可用 env 等绕过。
+func CronDenied(argv0 string) bool {
+	_, bad := cronDenied[filepath.Base(argv0)]
+	return bad
+}
+
+// RunAbs 仅供面板托管 crontab「立刻执行」：绝对路径、禁止 shell 与明确不做的工具。
+func RunAbs(ctx context.Context, timeout time.Duration, argv ...string) (Result, error) {
+	var r Result
+	if len(argv) == 0 {
+		return r, fmt.Errorf("空命令")
+	}
+	if !filepath.IsAbs(argv[0]) {
+		return r, fmt.Errorf("命令必须是绝对路径")
+	}
+	if CronDenied(argv[0]) {
+		return r, fmt.Errorf("禁止执行：%s", argv[0])
+	}
+	return runUnchecked(ctx, timeout, nil, nil, argv...)
+}
+
+func runUnchecked(ctx context.Context, timeout time.Duration, stdin io.Reader, stdout io.Writer, argv ...string) (Result, error) {
+	var r Result
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	var errb bytes.Buffer
+	var out bytes.Buffer
+	if stdout != nil {
+		cmd.Stdout = stdout
+	} else {
+		cmd.Stdout = &out
+	}
+	cmd.Stderr = &errb
+	if stdin != nil {
+		cmd.Stdin = stdin
+	}
+	err := cmd.Run()
+	r.Stderr = errb.String()
+	if stdout == nil {
+		r.Stdout = out.String()
+	}
+	if err != nil {
+		return r, fmt.Errorf("%s：%w", argv[0], err)
+	}
+	return r, nil
+}
+
+func Clip(s string) string {
+	if len(s) > 2000 {
+		return s[:2000]
+	}
+	return s
+}
+
+func SystemdLive() bool {
+	st, err := os.Stat("/run/systemd/system")
+	return err == nil && st.IsDir()
+}
+
+// ReloadOrStart 只 reload。已在运行时 start 会空成功，不能用来证明新配置已装上。
+// fallback 保留给调用方签名，不再执行。
+func ReloadOrStart(ctx context.Context, run func(context.Context, time.Duration, ...string) (Result, error), unit string, _ []string) error {
+	if run == nil {
+		run = Run
+	}
+	if !SystemdLive() {
+		return fmt.Errorf("无 systemd，无法 reload %s", unit)
+	}
+	r, err := run(ctx, 15*time.Second, "/usr/bin/systemctl", "reload", unit)
+	if err != nil {
+		return fmt.Errorf("systemctl reload %s 失败：%s", unit, Clip(r.Stderr))
+	}
+	return nil
+}
+
+// RunShell 用 /bin/sh -c 执行一条命令，和系统 cron 到点执行同一条语义。
+func RunShell(ctx context.Context, timeout time.Duration, command string) (Result, error) {
+	return runUnchecked(ctx, timeout, nil, nil, "/bin/sh", "-c", command)
+}

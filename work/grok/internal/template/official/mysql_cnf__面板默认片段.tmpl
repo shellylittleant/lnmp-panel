@@ -1,0 +1,6 @@
+[mysqld]
+max_connections = {{.MaxConnections}}
+innodb_buffer_pool_size = {{.InnoDBBufferPool}}
+slow_query_log = {{.SlowQueryLog}}
+long_query_time = {{.LongQueryTime}}
+slow_query_log_file = /var/log/mysql/mysql-slow.log

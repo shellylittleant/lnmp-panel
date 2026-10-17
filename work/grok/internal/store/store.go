@@ -1,0 +1,135 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"embed"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+
+	_ "modernc.org/sqlite"
+)
+
+//go:embed migrations/*.sql
+var migrationsFS embed.FS
+
+type DB struct {
+	SQL *sql.DB
+}
+
+func Open(path string) (*DB, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return nil, err
+	}
+	sqlDB, err := sql.Open("sqlite", sqliteDSN(path))
+	if err != nil {
+		return nil, err
+	}
+	return finishOpen(sqlDB, path, 4)
+}
+
+// OpenConns 与 Open 相同，但可指定最大连接数（回归测试用 1 验证无嵌套查询死锁）。
+func OpenConns(path string, maxOpen int) (*DB, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return nil, err
+	}
+	sqlDB, err := sql.Open("sqlite", sqliteDSN(path))
+	if err != nil {
+		return nil, err
+	}
+	return finishOpen(sqlDB, path, maxOpen)
+}
+
+func sqliteDSN(path string) string {
+	return "file:" + filepath.ToSlash(path) + "?_pragma=busy_timeout(15000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)"
+}
+
+func finishOpen(sqlDB *sql.DB, path string, maxOpen int) (*DB, error) {
+	if maxOpen < 1 {
+		maxOpen = 1
+	}
+	sqlDB.SetMaxOpenConns(maxOpen)
+	if err := sqlDB.Ping(); err != nil {
+		_ = sqlDB.Close()
+		return nil, err
+	}
+	if err := os.Chmod(path, 0600); err != nil && !os.IsNotExist(err) {
+		_ = sqlDB.Close()
+		return nil, err
+	}
+	db := &DB{SQL: sqlDB}
+	if err := db.Migrate(); err != nil {
+		_ = sqlDB.Close()
+		return nil, err
+	}
+	return db, nil
+}
+
+func (db *DB) Close() error {
+	return db.SQL.Close()
+}
+
+func (db *DB) Migrate() error {
+	if _, err := db.SQL.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
+		version INTEGER PRIMARY KEY,
+		applied_at TEXT NOT NULL
+	)`); err != nil {
+		return err
+	}
+	entries, err := migrationsFS.ReadDir("migrations")
+	if err != nil {
+		return err
+	}
+	var names []string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".sql") {
+			names = append(names, e.Name())
+		}
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		var ver int
+		if _, err := fmt.Sscanf(name, "%d_", &ver); err != nil {
+			return fmt.Errorf("迁移文件名无效：%s", name)
+		}
+		var exists int
+		if err := db.SQL.QueryRow(`SELECT COUNT(1) FROM schema_migrations WHERE version = ?`, ver).Scan(&exists); err != nil {
+			return err
+		}
+		if exists > 0 {
+			continue
+		}
+		body, err := migrationsFS.ReadFile("migrations/" + name)
+		if err != nil {
+			return err
+		}
+		tx, err := db.SQL.Begin()
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(string(body)); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("执行 %s：%w", name, err)
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)`, ver, time.Now().UTC().Format(time.RFC3339)); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (db *DB) Now() string {
+	return time.Now().UTC().Format(time.RFC3339)
+}
+
+func (db *DB) Ctx() context.Context {
+	return context.Background()
+}
