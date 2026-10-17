@@ -1,0 +1,9 @@
+.DS_Store
+*.swp
+*.tmp
+.env
+work/grok/bin/
+work/grok/web/node_modules/
+work/grok/coverage/
+*.db
+*.db-journal

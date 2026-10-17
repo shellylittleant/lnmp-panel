@@ -1,0 +1,705 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>LNMP 面板操作指南</title>
+<style>
+  @page { size: A4; margin: 18mm 16mm 20mm 16mm; }
+  html { font-size: 10.5pt; }
+  body {
+    font-family: "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+    color: #1f2328; line-height: 1.65; margin: 0;
+  }
+  h1 { font-size: 22pt; margin: 0 0 6pt; }
+  h2 { font-size: 16pt; margin: 22pt 0 8pt; padding-bottom: 4pt; border-bottom: 2px solid #2b6cb0; color: #1a365d; page-break-after: avoid; }
+  h3 { font-size: 12.5pt; margin: 16pt 0 6pt; color: #2b6cb0; page-break-after: avoid; }
+  h4 { font-size: 11pt; margin: 12pt 0 4pt; page-break-after: avoid; }
+  p { margin: 5pt 0; }
+  ul, ol { margin: 4pt 0 6pt; padding-left: 22pt; }
+  li { margin: 2pt 0; }
+  table { border-collapse: collapse; width: 100%; margin: 6pt 0 10pt; font-size: 9.5pt; page-break-inside: auto; }
+  tr { page-break-inside: avoid; }
+  th, td { border: 1px solid #c9d1d9; padding: 4pt 6pt; vertical-align: top; text-align: left; }
+  th { background: #eef3f9; font-weight: 600; }
+  code { font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace; font-size: 9pt; background: #f3f5f7; padding: 1px 4px; border-radius: 3px; }
+  pre { font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace; font-size: 9pt; background: #f3f5f7; padding: 8pt 10pt; border-radius: 4px; white-space: pre-wrap; word-break: break-all; border: 1px solid #e1e4e8; }
+  .btn { display: inline-block; border: 1px solid #8a94a6; border-radius: 3px; padding: 0 5px; font-size: 9.5pt; background: #fafbfc; white-space: nowrap; }
+  .note { border-left: 4px solid #2b6cb0; background: #eef3f9; padding: 6pt 10pt; margin: 8pt 0; }
+  .warn { border-left: 4px solid #d69e2e; background: #fffaeb; padding: 6pt 10pt; margin: 8pt 0; }
+  .danger { border-left: 4px solid #c53030; background: #fff5f5; padding: 6pt 10pt; margin: 8pt 0; }
+  .cover { height: 240mm; display: flex; flex-direction: column; justify-content: center; page-break-after: always; }
+  .cover h1 { font-size: 34pt; }
+  .cover .sub { font-size: 14pt; color: #4a5568; margin-top: 8pt; }
+  .cover table { width: auto; margin-top: 40pt; font-size: 10.5pt; }
+  .cover th { width: 90pt; }
+  .toc { page-break-after: always; }
+  .toc ol { list-style: none; padding-left: 0; column-count: 2; column-gap: 24pt; }
+  .toc li { margin: 2pt 0; }
+  .toc li.l2 { padding-left: 14pt; font-size: 9.5pt; color: #4a5568; }
+  .page { page-break-before: always; }
+  .kv th { width: 130pt; }
+  .small { font-size: 9pt; color: #4a5568; }
+</style>
+</head>
+<body>
+
+<div class="cover">
+  <h1>LNMP 面板操作指南</h1>
+  <div class="sub">Ubuntu 服务器可视化管理后台 · 完整版用户手册</div>
+  <table>
+    <tr><th>适用版本</th><td>0.1.0-stage9（内测版）</td></tr>
+    <tr><th>代码基线</th><td>commit <code>def71a4</code></td></tr>
+    <tr><th>程序包</th><td><code>lnmp-panel-amd64.tar.gz</code>（x86_64）</td></tr>
+    <tr><th>支持系统</th><td>Ubuntu 24.04 LTS 及以上 LTS 版本</td></tr>
+    <tr><th>文档日期</th><td>2026 年 9 月 18 日</td></tr>
+    <tr><th>面向读者</th><td>有基础 Linux 运维经验的站长与运维人员</td></tr>
+  </table>
+</div>
+
+<div class="toc">
+  <h2>目录</h2>
+  <ol>
+    <li>1. 面板简介与通用约定</li>
+    <li class="l2">1.1 定位与设计原则</li>
+    <li class="l2">1.2 支持范围与明确不做的功能</li>
+    <li class="l2">1.3 界面布局</li>
+    <li class="l2">1.4 所有配置页共有的机制</li>
+    <li>2. 安装、升级与卸载</li>
+    <li class="l2">2.1 准备工作</li>
+    <li class="l2">2.2 安装步骤</li>
+    <li class="l2">2.3 首次登录后必须做的事</li>
+    <li class="l2">2.4 升级与卸载</li>
+    <li class="l2">2.5 命令行工具</li>
+    <li>3. 登录与安全策略</li>
+    <li>4. 概览</li>
+    <li>5. 网站</li>
+    <li class="l2">5.1 站点列表与新建站点</li>
+    <li class="l2">5.2 站点详情表单</li>
+    <li class="l2">5.3 自动申请证书</li>
+    <li class="l2">5.4 手动填入证书</li>
+    <li class="l2">5.5 nginx 配置原文</li>
+    <li class="l2">5.6 删除站点</li>
+    <li class="l2">5.7 模板库</li>
+    <li>6. 文件</li>
+    <li class="l2">6.1 界面元素与浏览</li>
+    <li class="l2">6.2 上传、新建、下载</li>
+    <li class="l2">6.3 删除、复制、移动</li>
+    <li class="l2">6.4 解压与压缩</li>
+    <li class="l2">6.5 在线编辑</li>
+    <li class="l2">6.6 权限对话框</li>
+    <li class="l2">6.7 受保护的面板文件</li>
+    <li>7. 数据库</li>
+    <li>8. 防火墙</li>
+    <li>9. 日志</li>
+    <li>10. 定时任务</li>
+    <li>11. 迁移与热备</li>
+    <li class="l2">11.1 迁移：把 A 机整体搬到 B 机</li>
+    <li class="l2">11.2 热备：主备建立、故障切换与回切</li>
+    <li>12. 设置</li>
+    <li class="l2">12.1 面板页签</li>
+    <li class="l2">12.2 环境安装页签</li>
+    <li>13. 审计</li>
+    <li>14. 常见问题与排错</li>
+    <li>附录 A. 文件与目录位置</li>
+    <li>附录 B. 默认值与限制一览</li>
+  </ol>
+</div>
+
+<!-- ===================== 1 ===================== -->
+<h2>1. 面板简介与通用约定</h2>
+
+<h3>1.1 定位与设计原则</h3>
+<p>LNMP 面板是一个运行在 Ubuntu 服务器上的可视化管理后台，用浏览器管理 Nginx、PHP、MySQL、防火墙、日志、定时任务、站点文件，以及面板之间的迁移与主备热备。一个面板只管理它所在的一台机器。</p>
+<ul>
+  <li><b>SSH 能做的，面板都能做。</b>面板不做小白保护，面向有基础素养的运维人员。危险动作只做二次确认，不阻止。</li>
+  <li><b>表单与原文并存。</b>每个配置文件都可以用表单改，也可以直接改原文。改过原文就进入"原文模式"，表单只读，随时可以恢复为模板渲染。</li>
+  <li><b>不设上限，只设下限。</b>Ubuntu 24.04 以上、PHP 8.2 以上、MySQL 8.0 以上。</li>
+  <li><b>所有写操作进审计。</b>审计日志不可删除。</li>
+  <li><b>装东西集中在一处。</b>Nginx、PHP、MySQL、插件都在"设置 → 环境安装"里装。功能页只管用，不管装。</li>
+</ul>
+
+<h3>1.2 支持范围与明确不做的功能</h3>
+<table class="kv">
+  <tr><th>系统</th><td>Ubuntu 24.04 LTS 及以上 LTS，x86_64（当前程序包）。不支持与 Docker 共存，Docker 会改写防火墙规则。</td></tr>
+  <tr><th>Nginx</th><td>Ubuntu 官方源</td></tr>
+  <tr><th>PHP</th><td>Ondřej PPA，8.2 及以上多版本共存，每个站点各选一个版本</td></tr>
+  <tr><th>MySQL</th><td>x86_64 用 MySQL 官方源 8.4 LTS；arm64 用 Ubuntu 源 mysql-server 8.0</td></tr>
+  <tr><th>防火墙</th><td>nftables，面板独占管理，安装时会关闭 ufw</td></tr>
+  <tr><th>证书</th><td>Let's Encrypt HTTP-01 自动申请与续期；或手动粘贴证书</td></tr>
+  <tr><th>不做</th><td>WebSSH 在线终端、邮件服务、FTP、Docker 管理、软件商店、phpMyAdmin、回收站、全盘搜索、自动故障切换、DNS 联动、通配符证书</td></tr>
+</table>
+
+<h3>1.3 界面布局</h3>
+<p>登录后界面分三块：</p>
+<ul>
+  <li><b>左侧主菜单</b>，固定十项，顺序为：概览、网站、文件、数据库、防火墙、日志、定时任务、迁移与热备、设置、审计。</li>
+  <li><b>右上角</b>显示当前登录用户名和 <span class="btn">退出</span> 按钮。</li>
+  <li><b>备机横幅</b>：当本机是热备的备机时，页面顶部持续显示黄色提示"本机为备机，配置由主机同步"。此时所有写操作都会被拒绝，见第 11 章。</li>
+</ul>
+<p>页面上的操作结果以右上角浮动消息提示：绿色为成功，红色为失败并带原因，黄色为警告。</p>
+
+<h3>1.4 所有配置页共有的机制</h3>
+<p>网站、数据库 my.cnf、防火墙、PHP 的 php.ini 与 FPM pool、logrotate 这些配置页都遵循同一套机制，理解一次即可通用。</p>
+
+<h4>表单模式与原文模式</h4>
+<ul>
+  <li><b>表单模式</b>（默认）：填表单，点 <span class="btn">保存表单</span>，面板用官方模板渲染出完整配置文件写到磁盘。</li>
+  <li><b>原文模式</b>：在"原文"文本框里直接改配置文件内容，点 <span class="btn">保存原文</span>。保存后该配置进入原文模式，页面顶部显示蓝色"原文模式"提示，表单变为只读。</li>
+  <li><b>恢复为模板渲染</b>：点 <span class="btn">恢复为模板渲染</span>（防火墙页叫"恢复官方模板"），面板丢弃原文，重新用表单和模板生成配置，退出原文模式。</li>
+</ul>
+<div class="note">原文模式下面板不会再碰这个文件的内容，只负责写入磁盘和重载服务。改错了服务起不来，面板会把错误原样返回。</div>
+
+<h4>配置漂移与"确认覆盖磁盘"</h4>
+<p>如果有人在 SSH 里手工改了面板托管的配置文件，面板打开该页时会发现"磁盘内容与面板上次写入不一致"，顶部显示黄色"配置漂移"警告，并把磁盘上的实际内容显示在原文框里。此时无论保存表单还是保存原文，都必须先勾选 <b>确认覆盖磁盘</b>，否则保存被拒绝。这是为了防止面板悄悄覆盖掉别人的手工修改。</p>
+
+<h4>生效时间</h4>
+<p>保存成功的提示里会写"配置在 1 到 2 秒内生效"。面板保存后异步重载对应服务（nginx reload、php-fpm reload 等），不会阻塞页面。MySQL 的 my.cnf 是例外，保存会重启 MySQL。</p>
+
+<h4>二次确认</h4>
+<p>删除文件、覆盖同名文件、解压覆盖、改权限、防火墙应用都会弹出确认框或进入确认窗口。确认框只有 <span class="btn">确认</span> 和 <span class="btn">取消</span> 两个按钮。</p>
+
+<h4>后台任务进度</h4>
+<p>安装 Nginx、PHP、MySQL，导入 SQL 这类耗时操作会以后台任务运行，按钮旁边实时显示"任务名：阶段 详情"文字，完成后弹出成功提示并刷新页面数据。任务进行中相关按钮禁用，请不要刷新页面离开。</p>
+
+<!-- ===================== 2 ===================== -->
+<h2 class="page">2. 安装、升级与卸载</h2>
+
+<h3>2.1 准备工作</h3>
+<table>
+  <tr><th style="width:90pt">项</th><th>要求</th></tr>
+  <tr><td>服务器</td><td>x86_64，全新 Ubuntu 24.04 LTS，root 权限，不要安装 Docker</td></tr>
+  <tr><td>网络</td><td>公网 IP。云安全组放行 22、80、443，以及 <b>20000 到 49151</b> 整段（面板端口在安装时随机落在这个范围）</td></tr>
+  <tr><td>域名</td><td>要申请证书的域名，A 记录指向这台机器</td></tr>
+  <tr><td>你的电脑</td><td>能 ssh 和 scp 到服务器。知道自己电脑的公网出口 IP，安装时作为运维白名单</td></tr>
+</table>
+
+<h3>2.2 安装步骤</h3>
+<p><b>第 1 步：上传程序包。</b>在你的电脑上执行，把用户名和 IP 换成实际值：</p>
+<pre>scp lnmp-panel-amd64.tar.gz 用户@服务器IP:/root/</pre>
+<p><b>第 2 步：登录服务器安装。</b>把"你的公网IP"换成你电脑的公网出口 IP。这是运维白名单，只有白名单内的 IP 能打开面板，防止别人试密码，也防止你自己输错密码被锁：</p>
+<pre>ssh 用户@服务器IP
+sudo -i
+cd /root &amp;&amp; mkdir -p lnmp &amp;&amp; tar -xzf lnmp-panel-amd64.tar.gz -C lnmp
+cd lnmp &amp;&amp; OPS_CIDR=你的公网IP/32 bash scripts/install.sh</pre>
+<p>安装脚本支持两个环境变量：</p>
+<table>
+  <tr><th style="width:110pt">变量</th><th>作用</th></tr>
+  <tr><td><code>OPS_CIDR</code></td><td>运维白名单，逗号分隔的 IP 或 CIDR。留空则任何 IP 都能访问登录页（不推荐）。</td></tr>
+  <tr><td><code>BIND_MODE=localhost</code></td><td>面板只监听本机 127.0.0.1，必须通过 SSH 隧道访问。适合安全要求高的场景。</td></tr>
+</table>
+<p>安装脚本会做这些事：关闭 ufw、安装 nftables、把二进制装到 <code>/usr/local/bin/lnmp-panel</code>、生成配置与自签证书、注册 systemd 服务并启动。全程约 1 分钟，不联网下载任何东西。</p>
+<p><b>第 3 步：记下安装信息。</b>脚本末尾打印三行：面板地址、用户名 admin、初始密码。忘了随时可以再看：</p>
+<pre>cat /etc/lnmp-panel/install.info</pre>
+<p>面板地址形如 <code>https://服务器IP:随机端口/随机路径前缀/</code>。<b>随机端口和随机路径前缀都是安全设计的一部分</b>，直接访问 <code>https://服务器IP:端口/</code> 而不带路径前缀会得到 404。</p>
+<p><b>第 4 步：浏览器打开面板地址。</b>证书是自签的，浏览器会警告，选择"继续访问"或"高级 → 继续前往"。看到登录页即部署成功。</p>
+
+<h3>2.3 首次登录后必须做的事</h3>
+<ol>
+  <li>用 admin 和初始密码登录。</li>
+  <li>到 <b>设置 → 面板 → 修改密码</b>，换掉初始密码。要求 12 位以上，包含大小写字母、数字和符号。</li>
+  <li>到 <b>设置 → 面板 → TOTP 二次验证</b>，生成密钥、手机验证器扫码、输入验证码启用。</li>
+  <li>到 <b>设置 → 环境安装</b>，按需安装 Nginx、PHP、MySQL。</li>
+  <li>到 <b>防火墙</b>，检查默认规则中的 SSH 端口是否正确，然后应用并确认一次，让完整规则集写入开机配置。</li>
+</ol>
+
+<h3>2.4 升级与卸载</h3>
+<p><b>升级</b>：把新程序包解压后重新运行安装脚本即可。脚本检测到已有配置会提示"检测到已有配置，跳过初始化，仅更新二进制与服务"，面板地址、密码、所有数据都保留：</p>
+<pre>cd /root &amp;&amp; rm -rf lnmp &amp;&amp; mkdir lnmp &amp;&amp; tar -xzf lnmp-panel-amd64.tar.gz -C lnmp
+cd lnmp &amp;&amp; bash scripts/install.sh &amp;&amp; lnmp-panel version</pre>
+<p><b>卸载</b>：</p>
+<pre>cd /root/lnmp &amp;&amp; bash scripts/uninstall.sh</pre>
+<p>卸载只删面板本身，<b>不删站点文件、不删 MySQL 数据、不卸载 Nginx/PHP/MySQL</b>。</p>
+
+<h3>2.5 命令行工具</h3>
+<p>面板二进制同时是命令行工具，在服务器上以 root 执行：</p>
+<table>
+  <tr><th style="width:200pt">命令</th><th>作用</th></tr>
+  <tr><td><code>lnmp-panel version</code></td><td>显示版本号与 commit</td></tr>
+  <tr><td><code>lnmp-panel whitelist show</code></td><td>显示当前运维白名单</td></tr>
+  <tr><td><code>lnmp-panel whitelist clear</code></td><td>清空白名单，任何 IP 可访问。<b>出口 IP 变化把自己挡在外面时用这条恢复</b></td></tr>
+  <tr><td><code>lnmp-panel whitelist set 1.2.3.4/32,10.0.0.0/8</code></td><td>重设白名单</td></tr>
+  <tr><td><code>systemctl restart lnmp-panel</code></td><td>重启面板服务</td></tr>
+  <tr><td><code>journalctl -u lnmp-panel -n 100</code></td><td>看面板自身日志</td></tr>
+</table>
+<p>白名单命令改的是数据库，立即生效，不需要重启面板。本机回环地址 127.0.0.1 与 ::1 永远不受白名单限制，所以 SSH 隧道总是可以进面板。</p>
+
+<!-- ===================== 3 ===================== -->
+<h2 class="page">3. 登录与安全策略</h2>
+<p>登录页只有用户名、密码两个框和 <span class="btn">登录</span> 按钮。用户名固定为 admin。</p>
+<ol>
+  <li>输入密码点登录。密码正确且未开 TOTP，直接进入概览。</li>
+  <li>已开 TOTP 时，页面提示"请输入 TOTP 验证码"，出现第三个输入框。打开手机验证器输入 6 位数字，再点登录。验证码步骤必须在 5 分钟内完成，且必须从同一个 IP 发起。</li>
+</ol>
+<table class="kv">
+  <tr><th>失败锁定</th><td>同一 IP 在 15 分钟内密码错 5 次，该 IP 锁定 30 分钟，期间提示"已锁定"。锁的是来源 IP，不是账号。运维白名单外的 IP 根本到不了登录页。</td></tr>
+  <tr><th>会话时长</th><td>2 小时无操作自动过期；有操作则滑动延长，但从登录起最长 12 小时，之后必须重新登录。</td></tr>
+  <tr><th>修改密码</th><td>修改成功后其他所有会话立即踢出。</td></tr>
+  <tr><th>退出</th><td>点右上角 <span class="btn">退出</span>，当前会话立即作废。</td></tr>
+  <tr><th>路径前缀</th><td>不带随机路径前缀的任何请求都返回 404，扫描器看不到登录页。</td></tr>
+</table>
+
+<!-- ===================== 4 ===================== -->
+<h2>4. 概览</h2>
+<p>登录后的首页，每 5 秒自动刷新，分四块。</p>
+<table>
+  <tr><th style="width:110pt">区块</th><th>内容与操作</th></tr>
+  <tr><td>手动证书到期提醒</td><td>只在有手动填入的证书 30 天内到期时出现，黄色横幅列出域名与到期日。手动证书不自动续期，需到站点详情重新粘贴新证书，或改回自动申请。</td></tr>
+  <tr><td>系统概览</td><td>主机名、系统版本、面板监听地址、路径前缀、进程 PID、运行秒数，以及 Nginx / PHP / MySQL 三个服务的运行状态（running、stopped 等）。</td></tr>
+  <tr><td>环境状态</td><td>Nginx 是否已装、已装的 PHP 版本列表、MySQL 是否已装及版本。下方 <span class="btn">去环境安装</span> 按钮直达设置页的环境安装页签。</td></tr>
+  <tr><td>资源指标</td><td>采样时间与 1 分钟负载、CPU 百分比进度条、内存已用/总量进度条、磁盘已用/总量进度条、网络累计收发字节数，以及最近 1 小时 CPU 折线。调度器每 15 秒采样一次写入本地库，原始数据保留 7 天，按小时聚合保留 90 天。</td></tr>
+</table>
+<p>刚安装完的前 15 秒资源指标会显示"尚无采样"，属正常。</p>
+
+<!-- ===================== 5 ===================== -->
+<h2 class="page">5. 网站</h2>
+<p>网站页有两个页签：<b>站点</b> 与 <b>模板库</b>。</p>
+
+<h3>5.1 站点列表与新建站点</h3>
+<p>若尚未安装 Nginx，页面顶部显示黄色"尚未安装 Nginx"提示和 <span class="btn">去环境安装</span> 按钮，此时建站会失败，请先装 Nginx。</p>
+<p><b>新建站点</b>卡片有三个输入框：</p>
+<table>
+  <tr><th style="width:80pt">字段</th><th>说明</th></tr>
+  <tr><td>标识</td><td>站点的唯一英文 key，例如 <code>blog</code>。用于目录名 <code>/var/www/blog</code>、配置文件名 <code>/etc/nginx/sites-available/blog.conf</code>、日志过滤等。创建后不可改。</td></tr>
+  <tr><td>名称</td><td>给自己看的备注名，可中文。</td></tr>
+  <tr><td>域名</td><td>一个或多个域名，逗号分隔，例如 <code>example.com, www.example.com</code>。</td></tr>
+</table>
+<p>点 <span class="btn">创建</span>。面板会建根目录 <code>/var/www/标识</code>、写入一个"站点已创建"的欢迎页 index.html、用官方模板生成 nginx 配置并重载。此时浏览器打开 <code>http://域名/</code> 应能看到欢迎页。</p>
+<p><b>站点列表</b>显示标识、名称、域名、是否启用、是否漂移。<b>点击任意一行进入站点详情。</b></p>
+
+<h3>5.2 站点详情表单</h3>
+<table>
+  <tr><th style="width:80pt">字段</th><th>说明</th></tr>
+  <tr><td>名称</td><td>备注名</td></tr>
+  <tr><td>域名</td><td>逗号分隔，改完保存即生效</td></tr>
+  <tr><td>根目录</td><td>站点文件所在目录。旁边 <span class="btn">打开目录</span> 按钮直接跳到文件页的这个目录。</td></tr>
+  <tr><td>PHP 版本</td><td>下拉选择。"静态（无 PHP）"表示纯静态站；其余为已安装的 PHP 版本。选了版本，nginx 配置会把 .php 交给对应版本的 php-fpm。</td></tr>
+  <tr><td>反代目标</td><td>填 <code>http://127.0.0.1:3000</code> 这类地址，则站点变为反向代理，所有请求转发过去。留空为普通站点。</td></tr>
+  <tr><td>HTTP/2</td><td>勾选后 HTTPS 使用 HTTP/2，默认开。</td></tr>
+  <tr><td>站点模板</td><td>选择用哪个 nginx_site 类型的模板渲染此站点，默认官方模板。可选用户自定义模板，见 5.7。</td></tr>
+  <tr><td>伪静态</td><td>选择一个 nginx_rewrite 类型的模板作为伪静态规则片段（如 WordPress、ThinkPHP 等），留空为无。</td></tr>
+  <tr><td>确认覆盖磁盘</td><td>出现"配置漂移"警告时必须勾选才能保存。</td></tr>
+</table>
+<p>四个按钮：</p>
+<ul>
+  <li><span class="btn">保存表单</span>：按表单和模板重新渲染配置并重载 nginx。</li>
+  <li><span class="btn">申请/签发证书</span>：见 5.3。</li>
+  <li><span class="btn">恢复为模板渲染</span>：退出原文模式。</li>
+  <li><span class="btn">删除站点</span>：见 5.6。</li>
+</ul>
+
+<h3>5.3 自动申请证书</h3>
+<p>点 <span class="btn">申请/签发证书</span>，面板通过 Let's Encrypt 的 HTTP-01 方式签发证书，成功后自动写入站点配置、开启 HTTPS 并把 HTTP 自动跳转到 HTTPS。整个过程约 10 到 30 秒。</p>
+<p>前提条件：</p>
+<ul>
+  <li>站点的每个域名都已解析到本机公网 IP；</li>
+  <li>80 端口对公网开放（安全组与防火墙都放行）；</li>
+  <li>域名不能是通配符（<code>*.example.com</code>），HTTP-01 不支持。</li>
+</ul>
+<p>自动证书到期前 30 天由内部调度器自动续期，无需人工干预。续期失败会写入面板日志。</p>
+
+<h3>5.4 手动填入证书</h3>
+<p>站点详情下方"手动填入证书"卡片，用于已有商业证书或在别处申请的证书。</p>
+<ol>
+  <li>把<b>证书链 PEM</b>（服务器证书加中间证书，以 <code>-----BEGIN CERTIFICATE-----</code> 开头，可能有多段）粘贴到第一个框。</li>
+  <li>把<b>私钥 PEM</b> 粘贴到第二个框。</li>
+  <li>点 <span class="btn">保存手动证书</span>。</li>
+</ol>
+<p>面板校验规则：证书必须能解析；私钥必须与证书匹配；已过期的证书拒绝；证书域名不覆盖站点域名时<b>只警告不阻止</b>（黄色提示）。保存后写到与自动证书相同的位置并重载 nginx。</p>
+<div class="warn">手动证书不参与自动续期。到期前 30 天概览页和站点页会提醒。到期后需重新粘贴新证书，或点"申请/签发证书"改回自动申请。</div>
+
+<h3>5.5 nginx 配置原文</h3>
+<p>最下方"nginx conf 原文"卡片显示该站点完整的 nginx 配置文件。可以直接编辑后点 <span class="btn">保存原文</span>，之后站点进入原文模式，表单只读。要回到表单，点 <span class="btn">恢复为模板渲染</span>，注意这会丢弃原文里的手工修改。</p>
+<p>典型用法：需要加一段模板没提供的 location 时，先用表单配好基础项，再切原文加内容。</p>
+
+<h3>5.6 删除站点</h3>
+<p>点 <span class="btn">删除站点</span> 后立即删除，无二次确认。删除的是站点记录、nginx 配置和证书记录，<b>根目录下的文件与数据库都保留</b>，需要时到文件页和数据库页自行清理。</p>
+
+<h3>5.7 模板库</h3>
+<p>网站页第二个页签。列出所有模板，分三列：类型、名称、来源。类型包括 nginx_site（站点配置）、nginx_rewrite（伪静态）以及 php.ini、pool、my.cnf、nftables 等各类配置模板。来源分官方与用户。</p>
+<ul>
+  <li>点击一行，下方显示模板内容。<b>官方模板只读</b>，看得到改不了。</li>
+  <li><b>用户模板</b>可以改名称和内容，点 <span class="btn">保存</span>。</li>
+</ul>
+<p>模板用 Go 模板语法，变量由面板填入。修改用户模板后，使用该模板的站点要重新保存一次表单才会重新渲染。</p>
+
+<!-- ===================== 6 ===================== -->
+<h2 class="page">6. 文件</h2>
+<p>全目录文件管理器，默认打开 <code>/var/www</code>，可以进入任何目录。面向建站运维，不做全盘搜索和回收站。</p>
+
+<h3>6.1 界面元素与浏览</h3>
+<table>
+  <tr><th style="width:110pt">元素</th><th>说明</th></tr>
+  <tr><td>站点快捷跳转</td><td>下拉列出所有站点及其根目录，选中即跳转。</td></tr>
+  <tr><td>路径框 + <span class="btn">打开</span></td><td>直接输入绝对路径回车或点打开。</td></tr>
+  <tr><td>当前目录过滤</td><td>按文件名关键字过滤当前目录的列表，回车生效。只过滤当前目录，不递归。</td></tr>
+  <tr><td>面包屑</td><td>路径框下方一行 <code>/ var www blog</code>，点任意一级返回上级。</td></tr>
+  <tr><td>列表</td><td>名称、大小、权限、属主、属组、修改时间。<b>双击目录进入</b>。每行左侧有复选框，操作按钮作用于勾选的项。</td></tr>
+</table>
+
+<h3>6.2 上传、新建、下载</h3>
+<h4>上传到目录</h4>
+<p>点 <span class="btn">上传到目录</span> 选择一个或多个文件，选完立即上传到<b>当前目录</b>。单文件上限 2 GB，流式写入，不占内存。目标已有同名文件时弹出"目标已存在，确认覆盖？"。上传完成后文件属主自动改为 www-data，权限 644。</p>
+<h4>新建目录 / 新建文件</h4>
+<p>在"新目录或文件名"框输入名字，点 <span class="btn">新建目录</span> 或 <span class="btn">新建文件</span>，在当前目录创建。新建文件不填名字时默认为 untitled.txt。</p>
+<h4>下载</h4>
+<p>勾选<b>一项</b>点 <span class="btn">下载</span>。文件直接下载；目录打包为 zip 流式下载，不限大小。若目录下含面板自身的密钥或数据库文件，整个请求被拒绝并提示"该目录包含面板密钥或数据库，请缩小范围"。</p>
+
+<h3>6.3 删除、复制、移动</h3>
+<h4>删除</h4>
+<p>勾选一项或多项点 <span class="btn">删除</span>，弹出"确认删除选中的 N 项？不可恢复"，确认后删除。目录会递归删除。</p>
+<h4>复制 / 移动</h4>
+<ol>
+  <li>勾选<b>一项</b>（文件或目录）。</li>
+  <li>在"复制/移动目标路径"框填目标的<b>完整路径</b>。填目录路径则放进该目录，填带新文件名的路径则同时改名。</li>
+  <li>点 <span class="btn">复制</span> 或 <span class="btn">移动</span>。目标已存在则弹出覆盖确认。</li>
+</ol>
+<p>重命名就是移动到同目录下的新名字。禁止把目录复制或移动到它自己的子目录里。</p>
+
+<h3>6.4 解压与压缩</h3>
+<p><b>解压</b>：勾选一个 zip 或 tar.gz 文件点 <span class="btn">解压</span>，弹出"解压可能覆盖同名文件，确认？"，确认后解压到<b>当前目录</b>。解压出的文件属主改为 www-data，目录 755、文件 644。压缩包里的软链接和硬链接条目会被跳过。这是部署站点最常用的动作：上传站点压缩包到根目录，解压，完成。</p>
+<p><b>压缩 zip</b>：勾选一项或多项点 <span class="btn">压缩 zip</span>，在当前目录生成 <code>archive.zip</code>。已有同名 archive.zip 会被覆盖，压缩完可用移动功能改名。</p>
+
+<h3>6.5 在线编辑</h3>
+<p>勾选一个文件点 <span class="btn">编辑</span>，弹出全屏编辑器（CodeMirror，按扩展名对 PHP、HTML、CSS、JS、JSON 做语法高亮和行号）。改完点 <span class="btn">保存</span> 直接覆盖磁盘文件，点 <span class="btn">关闭</span> 放弃。</p>
+<p>限制：只能编辑 1 MB 以内的文本文件，超过会提示"超过 1 MB，请下载后编辑"。</p>
+
+<h3>6.6 权限对话框</h3>
+<p>勾选一项或多项点 <span class="btn">权限</span>，弹出对话框：</p>
+<table>
+  <tr><th style="width:130pt">项</th><th>说明</th></tr>
+  <tr><td>模式（八进制）</td><td>如 0644、0755、0777。</td></tr>
+  <tr><td>属主 / 属组</td><td>从系统用户和组列表中选择，可输入过滤。默认 www-data。</td></tr>
+  <tr><td>应用到子目录与文件</td><td>勾选后递归应用到所选目录下的所有内容。</td></tr>
+</table>
+<p>点 <span class="btn">保存</span> 后弹出确认。设为 777 或属主改为 root 时对话框顶部给出风险提示，确认文案变为"将设为 777 或属主 root，确认继续？"，但不阻止。每次修改写审计。</p>
+
+<h3>6.7 受保护的面板文件</h3>
+<p>以下路径可以看到但不能通过面板操作，列表中名字前带 🔒 锁图标，复选框禁用，点击提示"面板自身文件，请走 SSH"：</p>
+<ul>
+  <li><code>/var/lib/lnmp-panel/panel.db</code> 及其 <code>-wal</code>、<code>-shm</code> 文件（面板数据库）</li>
+  <li><code>/var/lib/lnmp-panel/secrets/</code>（MySQL 面板账号、ACME 账户等密钥）</li>
+  <li><code>/var/lib/lnmp-panel/tls/panel.key</code>（面板自身 TLS 私钥）</li>
+  <li><code>/etc/lnmp-panel/</code>（引导配置）</li>
+</ul>
+<p>对包含这些文件的父目录做删除、复制、移动、压缩、打包下载、递归改权限，整个操作被拒绝并提示"该目录包含面板密钥或数据库，请缩小范围"。软链接指向这些路径同样拒绝。站点自己的证书目录 <code>tls/sites</code> 不受限。</p>
+
+<!-- ===================== 7 ===================== -->
+<h2 class="page">7. 数据库</h2>
+<p>若尚未安装 MySQL，顶部显示提示和 <span class="btn">去环境安装</span> 按钮。面板通过独立的 <code>lnmp_panel@localhost</code> 账号管理 MySQL，不改 root 认证方式。</p>
+
+<h3>7.1 数据库卡片</h3>
+<table>
+  <tr><th style="width:130pt">操作</th><th>方法</th></tr>
+  <tr><td>建库</td><td>"库名"框输入名字点 <span class="btn">创建</span>。字符集固定 utf8mb4。</td></tr>
+  <tr><td>导出 SQL</td><td>在"导入/导出的库名"框输入库名，点 <span class="btn">导出 SQL</span>，浏览器下载 <code>库名.sql</code>。</td></tr>
+  <tr><td>导入</td><td>"导入/导出的库名"框输入目标库名，点旁边的文件选择框选一个 .sql 文件，点 <span class="btn">导入</span>。以后台任务运行，按钮旁显示进度，完成弹提示。大文件请耐心等待。</td></tr>
+  <tr><td>删除该库</td><td>"导入/导出的库名"框输入库名，点红色 <span class="btn">删除该库</span>。<b>立即删除，无确认，不可恢复。</b>建议先导出。</td></tr>
+</table>
+<p>列表显示库名、字符集、校对规则。系统库不显示。</p>
+
+<h3>7.2 用户卡片</h3>
+<table>
+  <tr><th style="width:80pt">字段</th><th>说明</th></tr>
+  <tr><td>用户</td><td>MySQL 用户名</td></tr>
+  <tr><td>Host</td><td>允许从哪里连接。<code>localhost</code> 只允许本机（PHP 站点用这个）；<code>%</code> 允许任意来源（需同时在防火墙放行 3306）；也可填具体 IP。</td></tr>
+  <tr><td>密码</td><td>连接密码</td></tr>
+  <tr><td>授权库</td><td>逗号分隔的库名列表，用户对这些库拥有全部权限。</td></tr>
+</table>
+<p>点 <span class="btn">创建</span>。列表下方每个用户对应一个红色 <span class="btn">删除 用户@Host</span> 按钮，点击立即删除。</p>
+
+<h3>7.3 面板托管 my.cnf 片段</h3>
+<p>面板只管理 <code>/etc/mysql/mysql.conf.d/lnmp-panel.cnf</code> 这一个片段文件，不碰 MySQL 主配置。表单四项：</p>
+<table>
+  <tr><th style="width:150pt">项</th><th>含义</th></tr>
+  <tr><td>max_connections</td><td>最大连接数</td></tr>
+  <tr><td>innodb_buffer_pool_size</td><td>InnoDB 缓冲池大小，如 <code>1G</code>，一般设为内存的 50% 到 70%</td></tr>
+  <tr><td>slow_query_log</td><td>是否记录慢查询，<code>1</code> 开 <code>0</code> 关</td></tr>
+  <tr><td>long_query_time</td><td>超过多少秒算慢查询</td></tr>
+</table>
+<div class="danger">保存表单或保存原文都会<b>重启 MySQL</b>，所有数据库连接断开。请确认没有进行中的导入、站点处于低峰时再保存。</div>
+<p>原文框、<span class="btn">保存原文</span>、<span class="btn">恢复为模板渲染</span>、"确认覆盖磁盘"的用法同第 1.4 节。</p>
+
+<!-- ===================== 8 ===================== -->
+<h2 class="page">8. 防火墙</h2>
+<p>面板独占管理 nftables，安装时已关闭 ufw。核心保障：<b>官方模板始终放行 SSH 端口和面板端口</b>，且任何规则应用后都有 60 秒确认窗口，把自己锁在外面会自动回滚。</p>
+
+<h3>8.1 表单字段</h3>
+<table>
+  <tr><th style="width:110pt">字段</th><th>说明</th></tr>
+  <tr><td>SSH 端口</td><td>安装时自动探测填入。<b>改 sshd 端口后务必同步改这里</b>。</td></tr>
+  <tr><td>面板端口</td><td>自动填入，一般不改。</td></tr>
+  <tr><td>入站策略</td><td><code>drop</code>：默认拒绝，只放行列出的端口（推荐）。<code>accept</code>：默认放行，防火墙形同虚设。</td></tr>
+  <tr><td>公网 80/443</td><td>勾选放行 HTTP 与 HTTPS。建站必勾。</td></tr>
+  <tr><td>额外 TCP 端口</td><td>逗号分隔，如 <code>3306, 8080</code>。</td></tr>
+  <tr><td>额外放行 CIDR</td><td>逗号分隔，这些网段访问任何端口都放行，如内网 <code>10.0.0.0/8</code>。</td></tr>
+</table>
+
+<h3>8.2 操作流程（务必按顺序）</h3>
+<ol>
+  <li>改表单，点 <span class="btn">保存表单</span>。提示"已保存（尚未应用到内核）"。这一步只写文件，规则还没生效。</li>
+  <li>点 <span class="btn">应用（进入确认窗口）</span>。规则加载到内核，页面顶部出现黄色横幅和倒计时"还剩 N 秒确认，否则自动回滚"。</li>
+  <li><b>倒计时内验证</b>：另开一个终端 ssh 登录服务器，确认能连；刷新面板确认能开。</li>
+  <li>验证没问题，点横幅里的 <span class="btn">确认保留</span>。规则写入开机配置，倒计时消失。</li>
+  <li>有问题，点 <span class="btn">立即回滚</span>，或什么都不做等 60 秒。</li>
+</ol>
+<p>自动回滚触发条件：60 秒内没点确认；或面板心跳中断（比如面板端口被新规则挡住）；或确认前面板进程重启。回滚后恢复到上一次确认过的规则。</p>
+<div class="warn">保存不等于应用。只点了保存表单没点应用，规则不会生效，重启后也不会生效。</div>
+
+<h3>8.3 规则集原文</h3>
+<p>下方"规则集原文"是完整的 nftables 规则文件，可直接编辑后点 <span class="btn">保存原文</span>，然后同样要走应用与确认。<span class="btn">恢复官方模板</span> 丢弃原文，按表单重新生成。</p>
+<p>面板自身的登录防护：运维白名单以外的 IP 无法访问面板端口，这条不在 nftables 里，而是面板进程内判断，本机回环永远放行。</p>
+
+<h3>8.4 迁移带来的待应用规则</h3>
+<p>通过迁移功能把配置同步到本机后，防火墙页顶部会出现蓝色提示"迁移带来的待应用规则：已按本机 SSH 与面板端口重写，尚未写入开机规则"。核对表单无误后点应用，走正常确认流程。</p>
+
+<!-- ===================== 9 ===================== -->
+<h2 class="page">9. 日志</h2>
+<p>三个卡片：日志查看、统计、logrotate。</p>
+
+<h3>9.1 日志查看</h3>
+<table>
+  <tr><th style="width:90pt">条件</th><th>说明</th></tr>
+  <tr><td>来源</td><td>下拉固定项：journald（面板与系统服务日志）、SSH / auth.log、syslog、内核 / 防火墙丢包、Nginx 访问（默认）、Nginx 错误、MySQL 错误、MySQL 慢查询；随环境增加的项：每个已装 PHP 版本的 PHP-FPM 日志、每个站点的 access 与 error 日志。</td></tr>
+  <tr><td>站点 key</td><td>可选，填站点标识只看该站点的日志。</td></tr>
+  <tr><td>关键字</td><td>可选，按子串过滤。</td></tr>
+  <tr><td>级别</td><td>全部 / error / warn / info。</td></tr>
+</table>
+<ul>
+  <li><span class="btn">查询</span>：返回最新 200 行，最新在上。</li>
+  <li><span class="btn">实时跟随</span>：像 <code>tail -f</code> 一样持续推送新行到列表顶部，最多保留 500 行，按钮变为 <span class="btn">停止跟随</span>，页面出现绿色"正在跟随"标签。服务端每 4 分钟断开一次连接，浏览器会自动重连。</li>
+</ul>
+<p>日志读取是流式的，大文件只读末尾，不会拖垮服务器。</p>
+
+<h3>9.2 统计</h3>
+<p>类型下拉三选一，点 <span class="btn">刷新</span>：</p>
+<table>
+  <tr><th style="width:90pt">类型</th><th>输出</th></tr>
+  <tr><td>访问</td><td>PV、UV、平均响应秒数；状态码分布、热门 URL、来源 IP、Referer 各前 10。可用"站点 key"限定某个站点。</td></tr>
+  <tr><td>SSH 失败</td><td>auth 日志中 SSH 登录失败次数。</td></tr>
+  <tr><td>慢 SQL</td><td>慢查询条数与耗时最长的语句列表。需在数据库页打开 slow_query_log。</td></tr>
+</table>
+<p>统计只读文件末尾最多 256 MB，超过时显示"已截断"提示。</p>
+
+<h3>9.3 logrotate</h3>
+<p>管理面板托管的 logrotate 配置片段。表单两项：<b>保留天数</b>（默认 14）、<b>单文件上限</b>（默认 100M）。点 <span class="btn">保存</span>。下方原文框可直接改片段内容，一起保存。漂移时勾选"确认覆盖磁盘"。</p>
+
+<!-- ===================== 10 ===================== -->
+<h2>10. 定时任务</h2>
+
+<h3>10.1 内部调度器（只读）</h3>
+<p>面板进程内的任务，不写 crontab，只能看不能改。列出任务 ID、周期、是否运行中、上次运行时间、上次错误。包括：资源采样（15 秒）、证书续期检查、日志统计、会话清理、审计归档、热备同步等。上次错误列有内容说明该任务最近一次失败，可据此排查。</p>
+
+<h3>10.2 用户 crontab（面板托管段）</h3>
+<p>面板在 root 的 crontab 里维护一段带标记的区域，标记外的条目面板不碰。</p>
+<table>
+  <tr><th style="width:110pt">字段</th><th>说明</th></tr>
+  <tr><td>名称</td><td>备注</td></tr>
+  <tr><td>五段 cron</td><td>标准 cron 表达式，如 <code>*/5 * * * *</code> 每 5 分钟，<code>0 3 * * *</code> 每天 3 点。</td></tr>
+  <tr><td>绝对路径命令</td><td>必须以 <code>/</code> 开头的绝对路径，如 <code>/usr/bin/php /var/www/blog/cron.php</code>。相对路径拒绝。</td></tr>
+  <tr><td>启用</td><td>开关。停用的任务保留在列表但不写入 crontab。</td></tr>
+</table>
+<p>点 <span class="btn">添加</span> 写入 crontab。列表下方每个任务有三个按钮：<span class="btn">立刻执行</span>（不等调度马上跑一次，结果写入"上次"列）、<span class="btn">停用/启用</span>、<span class="btn">删除</span>。</p>
+<p>若有人在 SSH 里手改了面板标记段，页面显示"与系统 crontab 不一致"警告。保存任意任务会按面板记录重写标记段，标记外的条目保留。</p>
+
+<!-- ===================== 11 ===================== -->
+<h2 class="page">11. 迁移与热备</h2>
+<p>一个页面两个页签。<b>迁移</b>是一次性把 A 机的全部内容搬到 B 机；<b>热备</b>是 B 机持续追随 A 机，A 故障时人工切换到 B。两者都要求两台机器各自装好面板，并且都装好 Nginx、PHP（版本一致）、MySQL。</p>
+
+<h3>11.1 迁移：把 A 机整体搬到 B 机</h3>
+<p><b>同步内容</b>：站点文件、nginx 站点配置与用户模板、PHP 各版本的 php.ini 与 pool、MySQL 全部库与用户权限与 my.cnf、SSL 证书与私钥与 ACME 账户、防火墙规则、面板的站点元数据与设置。B 机上已有的同名站点会被替换。</p>
+<p><b>传输方式</b>：两机直连。A 通过 B 的面板 API 握手并交换临时 SSH 密钥，文件走 rsync over SSH，数据库逻辑导出后传输再导入。完成后临时密钥作废，不经第三方存储。</p>
+
+<h4>操作步骤</h4>
+<table>
+  <tr><th style="width:36pt">步</th><th style="width:60pt">在哪台</th><th>操作</th></tr>
+  <tr><td>1</td><td>B</td><td>迁移页签 →"本机作为目标（B）"卡片 → 点 <span class="btn">生成令牌</span>。得到一串令牌和过期时间，<b>15 分钟内有效</b>。复制令牌。</td></tr>
+  <tr><td>2</td><td>A</td><td>"本机作为源（A）"卡片 → 目标地址填 B 的<b>完整面板地址</b> <code>https://IP:端口/路径前缀</code>，令牌框粘贴令牌 → 点 <span class="btn">配对</span>。成功提示"配对成功"，配对关系 7 天无操作自动过期。</td></tr>
+  <tr><td>3</td><td>A</td><td>点 <span class="btn">预检</span>。检查 B 的系统版本、磁盘空间、PHP 与 MySQL 是否就绪。若 B 已有站点，会列出"目标机已有 N 个站点将被替换"，必须勾选 <b>确认替换目标机已有站点</b> 才能继续。红色错误必须先解决。</td></tr>
+  <tr><td>4</td><td>A</td><td>点 <span class="btn">全量同步</span>。下方"进度"卡片每 2 秒刷新阶段、详情、百分比。站点在 A 上可继续运行。完成后详情列出 B 缺什么（如 PHP 版本），按站点实际使用版本汇总。</td></tr>
+  <tr><td>5</td><td>B</td><td>检查网站页、数据库页是否都出现了 A 的内容。防火墙页会出现"迁移带来的待应用规则"，核对后应用并确认。</td></tr>
+  <tr><td>6</td><td>DNS</td><td>把域名解析改指向 B。</td></tr>
+  <tr><td>7</td><td>A</td><td>切换前再点一次 <span class="btn">增量同步</span>，把 DNS 传播期间 A 上的新变化补到 B。可以多次点。</td></tr>
+  <tr><td>8</td><td>A</td><td>点 <span class="btn">完成迁移</span>。A 上的临时密钥删除，B 上的授权段删除。</td></tr>
+</table>
+<p><span class="btn">取消并作废钥</span> 与完成迁移动作相同，用于中途放弃。放弃后 B 上已同步的内容保留，需要时手工清理。</p>
+<div class="note">迁移不会改 B 机自己的面板密码、面板端口、运维白名单和 SSH 端口。防火墙规则会按 B 机的实际端口重写后等待人工应用。</div>
+
+<h3>11.2 热备：主备建立、故障切换与回切</h3>
+<h4>概念</h4>
+<ul>
+  <li><b>主机</b>对外服务并接受写入；<b>备机</b>只接收同步，80/443 对任何请求一律返回 404，MySQL 只读，面板所有写操作拒绝并显示顶部黄色横幅。</li>
+  <li><b>拉模型</b>：文件由备机定时 rsync 拉取（默认 60 秒，一轮没跑完自动拉长间隔），MySQL 用原生 GTID 主从复制持续同步，配置由备机定时拉取。</li>
+  <li><b>任期</b>：每次有人点"启用主模式"，任期加 1。两台机器比较任期，大的为主。</li>
+  <li><b>自我保护</b>：旧主机重新启动时会先问对端"你是主吗"，对端任期更大就把自己置为只读并挂 503 维护页，等运维处理。</li>
+  <li><b>第一版全部人工</b>：不做自动故障检测，不自动接管，不改 DNS。面板只提供按钮和状态。配对长期有效。</li>
+  <li>两台机器的<b>面板管理员密码在配对后共用</b>，随同步传播。</li>
+</ul>
+<h4>网络要求</h4>
+<p>安全组与防火墙：A 放行 B 的 IP 访问 SSH、3306、面板端口；B 放行 A 的 IP 访问 3306 和面板端口。回切时方向反过来，所以<b>两边都互相放行</b>最省事。热备状态卡片的"防火墙"行会提示缺哪条。</p>
+
+<h4>建立热备（A 主 B 备）</h4>
+<table>
+  <tr><th style="width:36pt">步</th><th style="width:60pt">在哪台</th><th>操作</th></tr>
+  <tr><td>1</td><td>A</td><td>热备页签 →"本机作为主机"→ 点 <span class="btn">生成热备令牌</span>，复制令牌。握手需在过期时间前完成，握手成功后配对长期有效。</td></tr>
+  <tr><td>2</td><td>B</td><td>"本机作为备机"→ 主机地址填 A 的完整面板地址，粘贴令牌 → 点 <span class="btn">配对（本机为备）</span>。B 显示角色"备机"，A 显示"主机"。</td></tr>
+  <tr><td>3</td><td>B</td><td>点 <span class="btn">开始同步</span>。首次会全量拷贝文件并建立 MySQL 复制，几分钟后状态卡片显示"MySQL 复制 正常"、落后秒数为个位数。</td></tr>
+</table>
+
+<h4>故障切换（A 挂了）</h4>
+<table>
+  <tr><th style="width:36pt">步</th><th style="width:60pt">在哪台</th><th>操作</th></tr>
+  <tr><td>1</td><td>B</td><td>热备页签 → 点 <span class="btn">启用主模式</span>。B 停止拉取、MySQL 切可写、nginx 启用全部站点，角色变主机，任期加 1。</td></tr>
+  <tr><td>2</td><td>DNS</td><td>把域名解析改指向 B。</td></tr>
+</table>
+
+<h4>A 恢复后回切到 A</h4>
+<table>
+  <tr><th style="width:36pt">步</th><th style="width:60pt">在哪台</th><th>操作</th></tr>
+  <tr><td>1</td><td>A</td><td>A 启动后自我保护生效，状态显示"对端已是主机，本机已只读并挂维护页"，访问 A 得到 503。</td></tr>
+  <tr><td>2</td><td>A</td><td>点 <span class="btn">降级为备</span>，再点 <span class="btn">开始同步</span>。A 从 B 拉取这段时间的数据，等"MySQL 复制 正常"且落后接近 0。</td></tr>
+  <tr><td>3</td><td>A</td><td>选低峰时段点 <span class="btn">启用主模式</span>。A 变主机，任期再加 1；B 收到通知自动只读并挂维护页。</td></tr>
+  <tr><td>4</td><td>DNS</td><td>把域名改回指向 A。</td></tr>
+  <tr><td>5</td><td>B</td><td>点 <span class="btn">降级为备</span>，再点 <span class="btn">开始同步</span>。回到最初的 A 主 B 备。</td></tr>
+</table>
+<p>也可以不回切，让 B 长期当主，A 当备。角色是对称的。</p>
+
+<h4>状态卡片字段</h4>
+<table>
+  <tr><th style="width:110pt">字段</th><th>含义</th></tr>
+  <tr><td>角色 / 任期 / nginx</td><td>单机、主机或备机；当前任期号；nginx 处于正常模式还是 404 兜底模式。</td></tr>
+  <tr><td>自我保护</td><td>红字出现表示本机已只读并挂维护页，需要人工点"降级为备"。</td></tr>
+  <tr><td>对端</td><td>配对的另一台面板地址。</td></tr>
+  <tr><td>同步间隔 / 上一轮 / 落后</td><td>文件同步的当前间隔秒数、上一轮扫描耗时毫秒、数据落后秒数。落后持续超过 5 分钟会出告警。</td></tr>
+  <tr><td>MySQL 复制</td><td>正常或未就绪。</td></tr>
+  <tr><td>告警 / 详情 / 防火墙</td><td>异常说明、当前动作说明、缺失的防火墙放行提示。</td></tr>
+</table>
+<div class="warn">切换后站点用户的 PHP session 会丢失需重新登录，这是设计内的可接受损失。站点数据库里的用户账号随 MySQL 复制不会丢。</div>
+
+<!-- ===================== 12 ===================== -->
+<h2 class="page">12. 设置</h2>
+<p>两个页签：<b>面板</b> 与 <b>环境安装</b>。</p>
+
+<h3>12.1 面板页签</h3>
+<h4>访问限制</h4>
+<table>
+  <tr><th style="width:130pt">项</th><th>说明</th></tr>
+  <tr><td>监听模式</td><td><b>公网</b>：面板监听所有网卡，靠随机端口、随机路径、运维白名单、TOTP 保护。<b>仅本机（SSH 隧道）</b>：只监听 127.0.0.1，必须 <code>ssh -L 本地端口:127.0.0.1:面板端口 服务器</code> 后经本地访问。改动后提示"点击重启面板生效"。</td></tr>
+  <tr><td>运维 IP / CIDR</td><td>逗号分隔。只有这些来源能访问面板端口。留空表示不限制。<b>出口 IP 变化会把自己挡在外面</b>，此时 SSH 上去执行 <code>lnmp-panel whitelist clear</code> 恢复。本机 127.0.0.1 / ::1 始终可访问。热备中的主机角色可留空。</td></tr>
+</table>
+<p><span class="btn">保存</span> 保存两项；<span class="btn">重启面板</span> 重启面板进程，约 3 秒，浏览器刷新即可，不影响站点服务。</p>
+
+<h4>修改密码</h4>
+<p>输入旧密码、新密码点 <span class="btn">修改</span>。新密码至少 12 位，必须同时包含大写、小写、数字、符号。成功后其他会话全部踢出。</p>
+
+<h4>TOTP 二次验证</h4>
+<ol>
+  <li>点 <span class="btn">生成绑定密钥</span>，页面显示二维码和 otpauth 链接。</li>
+  <li>用 Google Authenticator、Microsoft Authenticator、1Password 等扫描二维码，或手工录入链接里的密钥。</li>
+  <li>在"验证码"框输入验证器当前显示的 6 位数字，点 <span class="btn">启用</span>。状态变为"已开启"。</li>
+  <li>关闭：在"登录密码"框输入当前密码，点 <span class="btn">关闭 TOTP</span>。</li>
+</ol>
+<div class="danger">手机丢失又没备份密钥时，本版本没有绕过 TOTP 的自助手段，需联系开发者处理。启用前请把 otpauth 链接或密钥抄下来妥善保存。</div>
+
+<h3>12.2 环境安装页签</h3>
+<p>所有"装东西"的动作集中在这里，每项都是后台任务，安装期间按钮禁用并显示进度。</p>
+
+<h4>Nginx</h4>
+<p>显示已安装版本或"未安装"。点 <span class="btn">从 Ubuntu 源安装 Nginx</span>，约 1 分钟。</p>
+
+<h4>PHP</h4>
+<table>
+  <tr><th style="width:130pt">操作</th><th>方法</th></tr>
+  <tr><td>添加 PHP 源</td><td>点 <span class="btn">添加 PHP 源（Ondřej PPA）</span>。首次必须做，之后版本下拉才会出现 8.2 到最新版。</td></tr>
+  <tr><td>安装版本</td><td>版本下拉选一个标"可装"的版本，点 <span class="btn">安装此版本 FPM/CLI</span>。约 1 到 2 分钟。多个版本可并存。</td></tr>
+  <tr><td>扩展</td><td>选中已装版本后出现"扩展"卡片。已装扩展以标签显示，点标签上的 × 卸载。下拉选或手输扩展名（mysql、gd、curl、mbstring、xml、zip、bcmath、intl、redis、imagick、opcache 等），点 <span class="btn">安装扩展（apt）</span>。</td></tr>
+  <tr><td>php.ini 片段</td><td>表单项：upload_max_filesize、post_max_size、memory_limit、max_execution_time、display_errors、opcache.enable、opcache.memory_consumption、opcache.max_accelerated_files、opcache.validate_timestamps。<span class="btn">保存表单</span> 后自动 reload 该版本的 php-fpm。也可改原文。面板只写自己的片段文件，不改主 php.ini。</td></tr>
+  <tr><td>FPM pool</td><td>表单项：user、pm、pm.max_children。listen 固定不能在表单改，要改用原文。保存后 reload。</td></tr>
+  <tr><td>确认覆盖磁盘</td><td>最下方单独一个复选框，php.ini 与 pool 共用，漂移时必勾。</td></tr>
+</table>
+
+<h4>MySQL</h4>
+<p>显示计划来源与状态。x86_64 机器用 MySQL 官方 apt 源 8.4 LTS，arm64 用 Ubuntu 源 8.0，面板按架构自动选择。点 <span class="btn">安装 MySQL</span>，约 3 到 5 分钟。安装完成后面板自动创建管理账号 <code>lnmp_panel@localhost</code>，凭据在 <code>/var/lib/lnmp-panel/secrets/mysql-panel.cnf</code>，权限 0600。MySQL root 账号保持系统默认的 auth_socket 方式，SSH 上 <code>mysql</code> 直接可登。</p>
+
+<h4>插件</h4>
+<p>列出编入当前二进制的官方插件，每个一个开关，切换即启用或停用。发布版包含 filexfer（文件上传下载）插件，其功能已并入主菜单"文件"，保持默认即可。若显示"当前二进制未编入官方插件"，说明程序包不是发布构建。</p>
+
+<!-- ===================== 13 ===================== -->
+<h2>13. 审计</h2>
+<p>所有写操作（登录、改配置、建站、删文件、改权限、防火墙应用、迁移、热备切换等）都记一条，包含时间、来源 IP、操作者、动作、资源、详情。列表最新在上，每页 20 条，默认取最近 200 条。<b>审计日志不可删除、不可编辑。</b></p>
+<p>排查"这个配置是谁什么时候改的"、"是不是有人试过登录"，从这里查。</p>
+
+<!-- ===================== 14 ===================== -->
+<h2 class="page">14. 常见问题与排错</h2>
+<table>
+  <tr><th style="width:170pt">现象</th><th>原因与处理</th></tr>
+  <tr><td>打开面板地址显示 404</td><td>路径前缀漏了或错了。看 <code>cat /etc/lnmp-panel/install.info</code> 里的完整地址。</td></tr>
+  <tr><td>面板打不开，浏览器一直转圈或拒绝连接</td><td>多半是当前网络的出口 IP 不在运维白名单。SSH 上去执行 <code>lnmp-panel whitelist clear</code> 或 <code>whitelist set 新IP/32</code>。也检查安全组是否放行了面板端口。</td></tr>
+  <tr><td>提示"已锁定"</td><td>同 IP 15 分钟内错 5 次密码，锁 30 分钟。等待或换 IP。</td></tr>
+  <tr><td>忘记面板密码</td><td>初始密码在 <code>/etc/lnmp-panel/install.info</code>。改过之后又忘了，本版本没有自助重置命令，请联系开发者处理。内测期间请把密码存进密码管理器。</td></tr>
+  <tr><td>浏览器证书警告</td><td>面板用自签证书，正常现象，选择继续访问。</td></tr>
+  <tr><td>应用防火墙后 SSH 连不上</td><td>不要慌，60 秒内自动回滚。回滚后检查 SSH 端口填得对不对。</td></tr>
+  <tr><td>防火墙确认过了，重启后规则没了</td><td>确认是否真的点了"确认保留"。只保存没应用、或应用没确认，都不会写入开机规则。</td></tr>
+  <tr><td>页面顶部一直有"配置漂移"</td><td>有人 SSH 手改了文件。想保留手改内容就什么都不做；想让面板接管就勾"确认覆盖磁盘"后保存。</td></tr>
+  <tr><td>表单是灰的改不了</td><td>处于原文模式。点"恢复为模板渲染"，注意会丢弃原文修改。</td></tr>
+  <tr><td>申请证书失败</td><td>逐项检查：域名是否解析到本机；80 端口安全组和防火墙是否放行；是否通配符域名；Let's Encrypt 对同一域名一周有签发次数限制。</td></tr>
+  <tr><td>建站后域名打开是 nginx 默认页或别的站</td><td>域名没填对或 DNS 未生效。站点详情核对域名，SSH 上 <code>nginx -T | grep server_name</code>。</td></tr>
+  <tr><td>PHP 站点显示源码或 502</td><td>站点详情 PHP 版本选了"静态"，或所选版本的 php-fpm 没起来。环境安装页确认已装，SSH 上 <code>systemctl status php8.3-fpm</code>。</td></tr>
+  <tr><td>文件页某些文件带锁点不了</td><td>面板自身的数据库和密钥，设计如此，需要动就走 SSH。</td></tr>
+  <tr><td>编辑提示"超过 1 MB"</td><td>在线编辑只支持 1 MB 内文本。下载后本地改再上传覆盖。</td></tr>
+  <tr><td>页面顶部黄色"本机为备机"，所有保存都失败</td><td>本机是热备备机，只接收同步。要在主机上改；或到热备页签"启用主模式"。</td></tr>
+  <tr><td>热备状态"MySQL 复制 未就绪"</td><td>多为 3306 没互相放行。看状态卡片"防火墙"和"告警"行，检查两边安全组。</td></tr>
+  <tr><td>访问站点得到 503 维护页</td><td>本机触发了自我保护，对端已是主机。到热备页签点"降级为备"再"开始同步"。</td></tr>
+  <tr><td>导入 SQL 一直不动</td><td>大库耗时长，按钮旁有阶段提示。不要刷新页面。可到定时任务页看内部调度器有无错误。</td></tr>
+  <tr><td>改了 my.cnf 后 MySQL 起不来</td><td>参数值非法（如 buffer pool 超过物理内存）。原文框改回去保存，或 SSH 改 <code>/etc/mysql/mysql.conf.d/lnmp-panel.cnf</code> 后 <code>systemctl restart mysql</code>。</td></tr>
+  <tr><td>面板自己挂了</td><td>systemd 会在 2 秒内自动拉起，1 分钟内连续失败 5 次才会放弃。仍不行看 <code>journalctl -u lnmp-panel -n 100</code>。</td></tr>
+</table>
+
+<!-- ===================== 附录 ===================== -->
+<h2 class="page">附录 A. 文件与目录位置</h2>
+<table>
+  <tr><th style="width:230pt">路径</th><th>内容</th></tr>
+  <tr><td><code>/usr/local/bin/lnmp-panel</code></td><td>面板二进制，也是命令行工具</td></tr>
+  <tr><td><code>/etc/lnmp-panel/install.info</code></td><td>面板地址、用户名、初始密码</td></tr>
+  <tr><td><code>/etc/lnmp-panel/panel.json</code></td><td>引导配置：监听、端口、路径前缀、数据目录</td></tr>
+  <tr><td><code>/etc/lnmp-panel/nftables.conf</code></td><td>面板维护的防火墙规则集，被 <code>/etc/nftables.conf</code> include</td></tr>
+  <tr><td><code>/var/lib/lnmp-panel/panel.db</code></td><td>面板数据库（SQLite），含站点、设置、审计、会话</td></tr>
+  <tr><td><code>/var/lib/lnmp-panel/secrets/</code></td><td>MySQL 面板账号 <code>mysql-panel.cnf</code>、ACME 账户密钥等</td></tr>
+  <tr><td><code>/var/lib/lnmp-panel/tls/panel.crt / panel.key</code></td><td>面板自身的自签证书</td></tr>
+  <tr><td><code>/var/lib/lnmp-panel/tls/sites/&lt;站点ID&gt;/</code></td><td>各站点证书与私钥（自动与手动）</td></tr>
+  <tr><td><code>/var/lib/lnmp-panel/tmp/</code></td><td>上传、导入、热备首次拷贝的临时文件</td></tr>
+  <tr><td><code>/var/log/lnmp-panel/</code></td><td>面板日志目录</td></tr>
+  <tr><td><code>/var/www/&lt;站点标识&gt;/</code></td><td>站点根目录</td></tr>
+  <tr><td><code>/etc/nginx/sites-available/&lt;站点标识&gt;.conf</code></td><td>站点 nginx 配置</td></tr>
+  <tr><td><code>/etc/php/&lt;版本&gt;/fpm/conf.d/</code>、<code>pool.d/</code></td><td>面板写入的 php.ini 片段与 pool 文件</td></tr>
+  <tr><td><code>/etc/mysql/mysql.conf.d/lnmp-panel.cnf</code></td><td>面板托管的 my.cnf 片段；热备复制参数在同目录 <code>z-lnmp-panel-ha.cnf</code></td></tr>
+  <tr><td><code>/etc/systemd/system/lnmp-panel.service</code></td><td>systemd 服务单元</td></tr>
+</table>
+
+<h2>附录 B. 默认值与限制一览</h2>
+<table>
+  <tr><th style="width:200pt">项</th><th>值</th></tr>
+  <tr><td>面板端口范围</td><td>20000 到 49151，安装时随机</td></tr>
+  <tr><td>登录失败锁定</td><td>同 IP 15 分钟内 5 次，锁 30 分钟</td></tr>
+  <tr><td>TOTP 验证步骤有效期</td><td>5 分钟</td></tr>
+  <tr><td>会话</td><td>2 小时滑动，最长 12 小时</td></tr>
+  <tr><td>密码要求</td><td>12 位以上，含大小写、数字、符号</td></tr>
+  <tr><td>资源采样</td><td>15 秒一次；原始 7 天，小时聚合 90 天</td></tr>
+  <tr><td>文件上传单文件上限</td><td>2 GB</td></tr>
+  <tr><td>在线编辑上限</td><td>1 MB</td></tr>
+  <tr><td>上传后默认属主与权限</td><td>www-data，目录 755，文件 644</td></tr>
+  <tr><td>日志查询每次行数</td><td>200 行；实时跟随保留 500 行；服务端 4 分钟断线重连</td></tr>
+  <tr><td>日志统计读取上限</td><td>文件末尾 256 MB</td></tr>
+  <tr><td>logrotate 默认</td><td>保留 14 天，单文件 100M</td></tr>
+  <tr><td>防火墙确认窗口</td><td>60 秒</td></tr>
+  <tr><td>证书自动续期</td><td>到期前 30 天；手动证书到期前 30 天提醒</td></tr>
+  <tr><td>迁移令牌有效期</td><td>15 分钟；配对 7 天无操作过期</td></tr>
+  <tr><td>热备令牌</td><td>握手有时限，成功后长期有效</td></tr>
+  <tr><td>热备文件同步间隔</td><td>默认 60 秒，自适应拉长；落后超 5 分钟告警</td></tr>
+  <tr><td>审计归档</td><td>30 天</td></tr>
+  <tr><td>MySQL 面板账号</td><td><code>lnmp_panel@localhost</code>，凭据文件 0600</td></tr>
+</table>
+
+<p class="small" style="margin-top:30pt">本手册依据 commit def71a4 的界面与代码编写，对应第三轮真机复验通过的版本。内测期间界面若有调整，以实际页面为准。</p>
+
+</body>
+</html>
